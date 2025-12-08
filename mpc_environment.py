@@ -43,7 +43,7 @@ p.setJointMotorControlArray(
 )
 
 # Create a visual target (Red Sphere)
-target_pos_vis = [1.0, -1.0, 0.0] # x, y, arm_height
+target_pos_vis = [0.2, -1.0, 0.0] # x, y, arm_height
 target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
 p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
 
@@ -56,7 +56,7 @@ u_applied = np.zeros(5) # Start with 0 torque
 
 # Define Reference State (Where we want to go)
 # [x=2, y=1, theta=0, arm1=0, arm2=0, velocities=0...]
-x_ref = np.array([1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+x_ref = np.array([0.2, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 print("Starting MPC Loop...")
 mpc = MPCController(urdf_path, x_ref)

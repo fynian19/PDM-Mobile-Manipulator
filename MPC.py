@@ -14,7 +14,29 @@ class MPCController:
         self.dt = 0.05
         self.x_ref = x_ref
 
-    def solve_mpc_cvxpy(self, Ad, Bd, dd, x0, x_ref, N=10):
+    # 2. Define Weights
+        self.Q = np.diag([100, 100, 10, 10, 10] + [1, 1, 1, 1, 1]) 
+        self.R = np.eye(5) * 0.01
+
+        # 3. COMPUTE P ONCE (Based on TARGET dynamics)
+        # We linearize at the goal configuration (x_ref) with zero velocity.
+        
+        # Extract q_goal and v_goal (velocity must be 0 for equilibrium)
+        q_goal = x_ref[:self.model.nq] 
+        v_goal = np.zeros(self.model.nv) 
+        
+        # Get A and B at the GOAL state
+        # Note: We pass u=Gravity Compensation at goal (approx 0 for flat base)
+        Ac_goal, Bc_goal, _ = get_linear_dynamics(q_goal, v_goal, np.zeros(self.model.nv), self.model, self.data)
+        
+        # Discretize
+        Ad_goal = np.eye(self.model.nv * 2) + Ac_goal * self.dt
+        Bd_goal = Bc_goal * self.dt
+        
+        # Solve DARE for P
+        self.P = scipy.linalg.solve_discrete_are(Ad_goal, Bd_goal, self.Q, self.R)       
+
+    def solve_mpc_cvxpy(self, Ad, Bd, dd, x0, x_ref, N=3):
         """
         Solves the Linear MPC problem using CVXPY
         """
@@ -29,7 +51,7 @@ class MPCController:
         # We prioritize reaching the position (first 5)
         Q = np.diag([100, 100, 10, 10, 10] + [1, 1, 1, 1, 1]) 
         R = np.eye(nu) * 0.001  # Low penalty on torque (cheap control)
-        P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
+        #P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
         # Solve Discrete-time Algebraic Riccati Equation for terminal cost
         
         cost = 0
@@ -41,11 +63,11 @@ class MPCController:
             constraints += [X[:, k+1] == Ad @ X[:, k] + Bd @ U[:, k] + dd]
             
             # Input limits (approximate based on URDF)
-            constraints += [U[:, k] <= [500, 500, 80, 50, 50]]
-            constraints += [U[:, k] >= [-500, -500, -80, -50, -50]]
+            constraints += [U[:, k] <= [500, 500, 100, 100, 100]]
+            constraints += [U[:, k] >= [-500, -500, -100, -100, -100]]
 
         # Terminal Cost
-        cost += cp.quad_form(X[:, N] - x_ref, P)
+        cost += cp.quad_form(X[:, N] - x_ref, self.P)
 
         prob = cp.Problem(cp.Minimize(cost), constraints)
         prob.solve(solver=cp.OSQP, warm_start=True)
