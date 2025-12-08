@@ -1,0 +1,187 @@
+<?xml version="1.0"?>
+<robot name="simplerobot_renamed">
+
+    <!-- Materials -->
+    <material name="blue">
+        <color rgba="0 0 0.8 1"/>
+    </material>
+    <material name="white">
+        <color rgba="1 1 1 1"/>
+    </material>
+    <material name="green">
+        <color rgba="0 0.8 0 1"/>
+    </material>
+
+    <link name="world"/>
+
+    <!-- =====================================
+         MOBILE BASE
+    ====================================== -->
+
+    <link name="mobile_x_link">
+        <inertial>
+            <origin xyz="0 0 0"/>
+            <mass value="1.0"/>
+            <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+        </inertial>
+    </link>
+
+    <link name="mobile_y_link">
+        <inertial>
+            <origin xyz="0 0 0"/>
+            <mass value="1.0"/>
+            <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+        </inertial>
+    </link>
+
+    <link name="base_main_link">
+        <inertial>
+            <origin xyz="0 0 0.1"/>
+            <mass value="30.0"/>
+            <inertia ixx="1.0" ixy="0" ixz="0" iyy="1.0" iyz="0" izz="2.0"/>
+        </inertial>
+
+        <collision>
+            <origin xyz="0 0 0.1"/>
+            <geometry>
+                <cylinder length="0.2" radius="0.4"/>
+            </geometry>
+        </collision>
+
+        <visual>
+            <origin xyz="0 0 0.1"/>
+            <geometry>
+                <cylinder length="0.3" radius="0.4"/>
+            </geometry>
+            <material name="white"/>
+        </visual>
+    </link>
+
+    <joint name="joint_mobile_x" type="prismatic">
+        <origin xyz="0 0 0"/>
+        <axis xyz="1 0 0"/>
+        <parent link="world"/>
+        <child link="mobile_x_link"/>
+        <limit effort="87" velocity="2"/>
+    </joint>
+
+    <joint name="joint_mobile_y" type="prismatic">
+        <origin xyz="0 0 0"/>
+        <axis xyz="0 1 0"/>
+        <parent link="mobile_x_link"/>
+        <child link="mobile_y_link"/>
+        <limit effort="87" velocity="2"/>
+    </joint>
+
+    <joint name="joint_mobile_theta" type="revolute">
+        <origin xyz="0 0 0"/>
+        <axis xyz="0 0 1"/>
+        <parent link="mobile_y_link"/>
+        <child link="base_main_link"/>
+        <limit effort="87" velocity="2"/>
+    </joint>
+
+    <!-- =====================================
+         ARM 1 — LENGTH = 1.0 m
+    ====================================== -->
+
+    <link name="upper_arm_link">
+        <inertial>
+            <origin xyz="0 0 0.5"/>
+            <mass value="10.0"/>
+            <inertia ixx="0.15" ixy="0" ixz="0" iyy="0.15" iyz="0" izz="0.02"/>
+        </inertial>
+
+        <collision>
+            <origin xyz="0 0 0.5"/>
+            <geometry>
+                <cylinder length="1.0" radius="0.1"/>
+            </geometry>
+        </collision>
+
+        <visual>
+            <origin xyz="0 0 0.5"/>
+            <geometry>
+                <cylinder length="1.0" radius="0.1"/>
+            </geometry>
+            <material name="white"/>
+        </visual>
+    </link>
+
+    <joint name="joint_base_to_upper_arm" type="revolute">
+        <origin xyz="0 0 0.2"/>
+        <axis xyz="0 1 0"/>
+        <limit effort="1000" velocity="0.5" lower="-1.8" upper="1.8"/>
+        <parent link="base_main_link"/>
+        <child link="upper_arm_link"/>
+    </joint>
+
+    <!-- =====================================
+         ARM 2 — LENGTH = 0.7 m
+    ====================================== -->
+
+    <link name="lower_arm_link">
+        <inertial>
+            <origin xyz="0 0 0.35"/>
+            <mass value="7.0"/>
+            <inertia ixx="0.07" ixy="0" ixz="0" iyy="0.07" iyz="0" izz="0.015"/>
+        </inertial>
+
+        <collision>
+            <origin xyz="0 0 0.35"/>
+            <geometry>
+                <cylinder length="0.7" radius="0.1"/>
+            </geometry>
+        </collision>
+
+        <visual>
+            <origin xyz="0 0 0.35"/>
+            <geometry>
+                <cylinder length="0.7" radius="0.1"/>
+            </geometry>
+            <material name="white"/>
+        </visual>
+    </link>
+
+    <joint name="joint_upper_to_lower_arm" type="revolute">
+        <origin xyz="0 0 1.0"/>
+        <axis xyz="0 1 0"/>
+        <limit effort="1000" velocity="0.5" lower="-2.1" upper="2.1"/>
+        <parent link="upper_arm_link"/>
+        <child link="lower_arm_link"/>
+    </joint>
+
+    <!-- =====================================
+         END EFFECTOR BLOCK (0.2 m cube)
+    ====================================== -->
+
+    <link name="tool_link">
+        <inertial>
+            <origin xyz="0 0 0.1"/>
+            <mass value="0.5"/>
+            <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002"/>
+        </inertial>
+
+        <collision>
+            <origin xyz="0 0 0.1"/>
+            <geometry>
+                <box size="0.2 0.2 0.2"/>
+            </geometry>
+        </collision>
+
+        <visual>
+            <origin xyz="0 0 0.1"/>
+            <geometry>
+                <box size="0.2 0.2 0.2"/>
+            </geometry>
+            <material name="green"/>
+        </visual>
+    </link>
+
+    <joint name="joint_lower_arm_to_tool" type="fixed">
+        <origin xyz="0 0 0.7"/>
+        <parent link="lower_arm_link"/>
+        <child link="tool_link"/>
+    </joint>
+
+</robot>
