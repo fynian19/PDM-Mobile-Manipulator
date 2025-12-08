@@ -6,7 +6,7 @@ import os
 # (Ensure you save the XML content you provided to this file)
 
 
-def get_linear_dynamics_derivatives(q_current, v_current, u_current, model, data):
+def get_linear_dynamics(q_current, v_current, u_current, model, data):
     """
     Computes dx = A*x + B*u + d
     Linearized around (q, v, u_current)
@@ -45,14 +45,14 @@ def get_linear_dynamics_derivatives(q_current, v_current, u_current, model, data
     
     return Ac, Bc, d
 
-q_current = np.zeros(5) # Current Position
-v_current = np.zeros(5) # Current Velocity
-u_current = np.zeros(5) # Current Control Input (Torque)
+#q_current = np.zeros(5) # Current Position
+#v_current = np.zeros(5) # Current Velocity
+#u_current = np.zeros(5) # Current Control Input (Torque)
 
-model = pin.buildModelFromUrdf("URDF/mobileManipulator.urdf")
-data = model.createData()
+#model = pin.buildModelFromUrdf("URDF/mobileManipulator.urdf")
+#data = model.createData()
 
-print(get_linear_dynamics_derivatives(q_current, v_current, u_current, model, data))
+#print(get_linear_dynamics(q_current, v_current, u_current, model, data))
 
 def get_nonlinear_dynamics():
     # Load model (as done previously)
