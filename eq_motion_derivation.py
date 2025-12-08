@@ -45,6 +45,22 @@ def get_linear_dynamics(q_current, v_current, u_current, model, data):
     
     return Ac, Bc, d
 
+def discretize_dynamics(Ac, Bc, d, dt):
+    """
+    Discretizes the continuous-time dynamics:
+    dx/dt = Ac*x + Bc*u + d
+    to:
+    x_{k+1} = Ad*x_k + Bd*u_k + dd
+    using Euler discretization.
+    """
+    n_x = Ac.shape[0]
+    n_u = Bc.shape[1]
+    
+    Ad = np.eye(n_x) + Ac * dt
+    Bd = Bc * dt
+    dd = d * dt
+    
+    return Ad, Bd, dd
 #q_current = np.zeros(5) # Current Position
 #v_current = np.zeros(5) # Current Velocity
 #u_current = np.zeros(5) # Current Control Input (Torque)

@@ -43,7 +43,7 @@ p.setJointMotorControlArray(
 )
 
 # Create a visual target (Red Sphere)
-target_pos_vis = [2.0, 1.0, 1.0] # x, y, arm_height
+target_pos_vis = [1.0, -1.0, 0.0] # x, y, arm_height
 target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
 p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
 
@@ -56,10 +56,10 @@ u_applied = np.zeros(5) # Start with 0 torque
 
 # Define Reference State (Where we want to go)
 # [x=2, y=1, theta=0, arm1=0, arm2=0, velocities=0...]
-x_ref = np.array([2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+x_ref = np.array([1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 print("Starting MPC Loop...")
-mpc = MPCController(urdf_path)
+mpc = MPCController(urdf_path, x_ref)
 while True:
     start_time = time.time()
     
@@ -79,11 +79,11 @@ while True:
     
     # --- D. SOLVE MPC ---
     #x_current = np.concatenate([q_current, v_current])
-    u_optimal = mpc.solve_mpc()
+    u_optimal = mpc.get_control_action(q_current, v_current, u_applied)
     
     # --- E. APPLY CONTROL (Torque) ---
     # Clamp safety limits (PyBullet can explode with huge torques)
-    u_applied = np.clip(u_optimal, -100, 100)
+    u_applied = np.clip(u_optimal, -1000, 1000)
     
     p.setJointMotorControlArray(
         robot_id, 
