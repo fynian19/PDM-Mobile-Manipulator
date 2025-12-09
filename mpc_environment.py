@@ -5,7 +5,7 @@ import numpy as np
 import pinocchio as pin
 import cvxpy as cp
 
-from MPC import MPCController, draw_mpc_path, MPCVisualizer
+from MPC import MPCController, MPCVisualizer
 
 
 # Setup Pinocchio Model ONCE
@@ -35,36 +35,18 @@ for i in range(p.getNumJoints(robot_id)):
         controlled_joints.append(i)
 
 # IMPORTANT: Turn off PyBullet's default velocity motors to use Torque Control
-p.setJointMotorControlArray(
-    robot_id, 
-    controlled_joints, 
-    p.VELOCITY_CONTROL, 
-    forces=np.zeros(len(controlled_joints))
-)
-# --- DEBUG: CHECK JOINT ORDER ---
-print("\n--- JOINT ORDER CHECK ---")
-print(f"Pinocchio (nq={pin_model.nq}):")
-for name in pin_model.names:
-    print(f" - {name}")
+p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, forces=np.zeros(len(controlled_joints)))
 
-print("\nPyBullet Controlled Joints:")
-for joint_id in controlled_joints:
-    info = p.getJointInfo(robot_id, joint_id)
-    print(f" - ID {joint_id}: {info[1].decode()}")
-print("-------------------------\n")
-
-
-# ==========================================
-# 3. MAIN CONTROL LOOP
+## ==========================================
+# MAIN CONTROL LOOP
 # ==========================================
 
-dt = 0.02  # 50 Hz MPC
-no_steps = 10 # Number of physics steps per MPC step
-
-u_applied = np.zeros(5) # Start with 0 torque
+# Sim setup
+dt = 0.02  # PyBullet physics time step
+no_steps = 7 # Number of physics steps per MPC step
 
 # Define Reference State (Where we want to go)
-x_ref = np.array([2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+x_ref = np.array([-1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 # Create a visual target (Red Sphere)
 target_pos_vis = x_ref[:3] # x, y, arm_height
@@ -75,7 +57,8 @@ print("Starting MPC Loop...")
 mpc = MPCController(urdf_path, x_ref, dt*no_steps)
 viz = MPCVisualizer(p)
 
-sim_step_counter = 0
+u_applied = np.zeros(5) # Start with 0 torque
+
 while True:
     start_time = time.time()
     
@@ -96,20 +79,17 @@ while True:
     #dd = d * dt
     
     # --- D. SOLVE MPC ---
-    #x_current = np.concatenate([q_current, v_current])
     u_optimal, X_pred = mpc.get_control_action(q_current, v_current, u_applied)
+
+    # --- D. VISUALIZE MPC TRAJECTORY ---
     viz.draw_trajectory(X_pred)
-    #if sim_step_counter % 5 == 0:
-        # Increase lifetime so it stays visible until the next draw
-    #    draw_mpc_path(p, X_pred, lifetime=0.1)
 
     print(f"Optimal Control: {u_optimal}")
     # --- E. APPLY CONTROL (Torque) ---
     # Clamp safety limits (PyBullet can explode with huge torques)
     u_applied = np.clip(u_optimal, -500, 500)
     
-    
-    # Step physics 12 times (12 * 1/240s = 0.05s)
+    # Step simulation multiple times
     for _ in range(no_steps): 
         p.setJointMotorControlArray(robot_id, controlled_joints, p.TORQUE_CONTROL, forces=u_applied)
         p.stepSimulation()
@@ -119,4 +99,3 @@ while True:
     elapsed = time.time() - start_time
     if elapsed < dt:
         time.sleep(dt - elapsed)
-    sim_step_counter += 1

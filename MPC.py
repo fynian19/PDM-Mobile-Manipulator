@@ -170,26 +170,3 @@ class MPCVisualizer:
                     lifeTime=0,
                     replaceItemUniqueId=self.line_ids[k] # <--- THE KEY FIX
                 )
-                
-def draw_mpc_path(p, X_pred, lifetime):
-    """
-    Draws the predicted MPC trajectory in PyBullet.
-    X_pred: (nx, N+1) array. 
-            Rows 0,1 must be x,y.
-    """
-    if X_pred is None: return
-
-    # We iterate through the horizon N
-    for k in range(X_pred.shape[1] - 1):
-        # Start point (x, y, z=0.02)
-        start = [X_pred[0, k], X_pred[1, k], 0.02] 
-        # End point
-        end   = [X_pred[0, k+1], X_pred[1, k+1], 0.02]
-        
-        p.addUserDebugLine(
-            lineFromXYZ=start,
-            lineToXYZ=end,
-            lineColorRGB=[0, 1, 0], # Green color
-            lineWidth=3,
-            lifeTime=lifetime # Disappears automatically after 0.1s
-        )
