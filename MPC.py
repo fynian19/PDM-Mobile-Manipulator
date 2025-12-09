@@ -4,96 +4,144 @@ import pinocchio as pin
 import cvxpy as cp
 import scipy
 class MPCController:
-    def __init__(self, urdf_path, x_ref):
-        # Initialize Pinocchio model
+
+    def __init__(self, urdf_path, x_ref, dt, N=20):
+        self.dt = dt
+        self.N = N 
+        self.x_ref_val = x_ref
+        
+        # 1. Setup Pinocchio
         self.model = pin.buildModelFromUrdf(urdf_path)
-        
         self.data = self.model.createData() 
-        
-        # Pre-allocate reuseable arrays for the solver to save time
-        self.dt = 0.05
-        self.x_ref = x_ref
+        self.nx = self.model.nv * 2
+        self.nu = self.model.nv
 
-    # 2. Define Weights
-        self.Q = np.diag([100, 100, 10, 10, 10] + [1, 1, 1, 1, 1]) 
-        self.R = np.eye(5) * 0.01
+        # 2. Weights (Store as numpy arrays for math)
+        self.Q_diag = np.array([100, 100, 100, 100, 100] + [1, 1, 1, 1, 1]) 
+        self.R_diag = np.array([0.00001] * self.nu) # Fixed your R shape logic
+        
+        # 3. Compute Terminal Cost P
+        self._compute_terminal_cost()
 
-        # 3. COMPUTE P ONCE (Based on TARGET dynamics)
-        # We linearize at the goal configuration (x_ref) with zero velocity.
+        # 4. BUILD CVXPY PROBLEM ONCE (The Speed Fix)
+        self._setup_mpc_problem()
+
+    def _compute_terminal_cost(self):
+        # Linearize at the goal (x_ref) with 0 velocity
+        q_goal = self.x_ref_val[:self.model.nq]
+        v_goal = np.zeros(self.model.nv)
         
-        # Extract q_goal and v_goal (velocity must be 0 for equilibrium)
-        q_goal = x_ref[:self.model.nq] 
-        v_goal = np.zeros(self.model.nv) 
-        
-        # Get A and B at the GOAL state
-        # Note: We pass u=Gravity Compensation at goal (approx 0 for flat base)
-        Ac_goal, Bc_goal, _ = get_linear_dynamics(q_goal, v_goal, np.zeros(self.model.nv), self.model, self.data)
+        # Get Dynamics at Goal
+        Ac, Bc, _ = get_linear_dynamics(q_goal, v_goal, np.zeros(self.nu), self.model, self.data)
         
         # Discretize
-        Ad_goal = np.eye(self.model.nv * 2) + Ac_goal * self.dt
-        Bd_goal = Bc_goal * self.dt
+        Ad = np.eye(self.nx) + Ac * self.dt
+        Bd = Bc * self.dt
         
-        # Solve DARE for P
-        self.P = scipy.linalg.solve_discrete_are(Ad_goal, Bd_goal, self.Q, self.R)       
+        # Solve DARE
+        Q_mat = np.diag(self.Q_diag)
+        R_mat = np.diag(self.R_diag)
+        self.P_val = scipy.linalg.solve_discrete_are(Ad, Bd, Q_mat, R_mat)
 
-    def solve_mpc_cvxpy(self, Ad, Bd, dd, x0, x_ref, N=3):
+    def _setup_mpc_problem(self):
         """
-        Solves the Linear MPC problem using CVXPY
+        Defines the MPC problem symbolically ONCE.
+        We use cp.Parameter for matrices that change every step.
         """
-        nx, nu = Bd.shape
+        # --- Parameters (Placeholders for data) ---
+        self.p_Ad = cp.Parameter((self.nx, self.nx), name="Ad")
+        self.p_Bd = cp.Parameter((self.nx, self.nu), name="Bd")
+        self.p_dd = cp.Parameter((self.nx,), name="dd")
+        self.p_x0 = cp.Parameter((self.nx,), name="x0")
+        self.p_xref = cp.Parameter((self.nx,), name="xref")
         
-        # Variables
-        X = cp.Variable((nx, N+1))
-        U = cp.Variable((nu, N))
+        # --- Variables ---
+        self.X = cp.Variable((self.nx, self.N+1))
+        self.U = cp.Variable((self.nu, self.N))
         
-        # Cost Weights
-        # State: [x, y, theta, q1, q2, vx, vy, vtheta, vq1, vq2]
-        # We prioritize reaching the position (first 5)
-        Q = np.diag([100, 100, 10, 10, 10] + [1, 1, 1, 1, 1]) 
-        R = np.eye(nu) * 0.001  # Low penalty on torque (cheap control)
-        #P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
-        # Solve Discrete-time Algebraic Riccati Equation for terminal cost
-        
+        # --- Cost & Constraints ---
         cost = 0
-        constraints = [X[:, 0] == x0]
+        constraints = [self.X[:, 0] == self.p_x0]
         
-        for k in range(N):
-            #print(X[:, k], x_ref)
-            cost += cp.quad_form(X[:, k] - x_ref, Q) + cp.quad_form(U[:, k], R)
-            constraints += [X[:, k+1] == Ad @ X[:, k] + Bd @ U[:, k] + dd]
-            
-            # Input limits (approximate based on URDF)
-            constraints += [U[:, k] <= [500, 500, 100, 100, 100]]
-            constraints += [U[:, k] >= [-500, -500, -100, -100, -100]]
+        # Pre-compute sqrt matrices for efficient 'sum_squares' (Standard CVXPY trick)
+        Q_sqrt = np.sqrt(self.Q_diag)
+        R_sqrt = np.sqrt(self.R_diag)
 
-        # Terminal Cost
-        cost += cp.quad_form(X[:, N] - x_ref, self.P)
-
-        prob = cp.Problem(cp.Minimize(cost), constraints)
-        prob.solve(solver=cp.OSQP, warm_start=True)
-        
-        if prob.status != cp.OPTIMAL:
-            print("MPC Infeasible!")
-            return np.zeros(nu)
+        for k in range(self.N):
+            # Cost (Tracking + Effort)
+            state_error = self.X[:, k] - self.p_xref
+            cost += cp.sum_squares(cp.multiply(Q_sqrt, state_error)) 
+            cost += cp.sum_squares(cp.multiply(R_sqrt, self.U[:, k]))
             
-        return U[:, 0].value
-    
-    
+            # Dynamics Update
+            constraints += [self.X[:, k+1] == self.p_Ad @ self.X[:, k] + self.p_Bd @ self.U[:, k] + self.p_dd]
+            
+            # Constraints (Make sure limits match your URDF)
+            constraints += [self.U[:, k] <= [50, 50, 50, 10, 10]]
+            constraints += [self.U[:, k] >= [-50, -50, -50, -10, -10]]
+
+        # Terminal Cost (Using P)
+        term_error = self.X[:, self.N] - self.p_xref
+        cost += cp.quad_form(term_error, cp.psd_wrap(self.P_val))
+
+        # Compile!
+        self.prob = cp.Problem(cp.Minimize(cost), constraints)
+
     def get_control_action(self, q, v, u_last):
-        # --- FAST PART (Run at 50Hz) ---
-        
-        # 1. We pass 'self.data' into the function.
-        # The function overwrites the numbers inside 'self.data' with new ones.
-        # It does NOT create a new object.
+        # 1. Linearize Dynamics (Fast)
         Ac, Bc, d = get_linear_dynamics(q, v, u_last, self.model, self.data)
         Ad, Bd, dd = discretize_dynamics(Ac, Bc, d, self.dt)
-        optimal_u = self.solve_mpc_cvxpy(Ad, Bd, dd, np.concatenate([q, v]), self.x_ref)
-        print("Optimal u:", optimal_u)
-        return optimal_u
+        
+        # 2. Update Parameters (No compilation needed!)
+        self.p_Ad.value = Ad
+        self.p_Bd.value = Bd
+        self.p_dd.value = dd
+        self.p_x0.value = np.concatenate([q, v])
+        self.p_xref.value = self.x_ref_val
+        
+        # 3. Solve (Fast)
+        try:
+            # warm_start=True reuses the previous solution as a guess
+            self.prob.solve(solver=cp.OSQP, warm_start=True)
+        except Exception as e:
+            print(f"Solver failed: {e}")
+            return np.zeros(self.nu)
+
+        if self.prob.status != cp.OPTIMAL:
+            print(f"Infeasible: {self.prob.status}")
+            return np.zeros(self.nu)
+            
+        # Return first control action
+        return self.U[:, 0].value, self.X.value
     
     def dummy_mpc(self):
         u = np.ones(self.model.nv)*0  # Placeholder
         u[2] = -80
         return u
     
-    
+
+# ==========================================
+# 2. SETUP PYBULLET SIMULATION
+# ==========================================
+def draw_mpc_path(p, X_pred, lifetime):
+    """
+    Draws the predicted MPC trajectory in PyBullet.
+    X_pred: (nx, N+1) array. 
+            Rows 0,1 must be x,y.
+    """
+    if X_pred is None: return
+
+    # We iterate through the horizon N
+    for k in range(X_pred.shape[1] - 1):
+        # Start point (x, y, z=0.02)
+        start = [X_pred[0, k], X_pred[1, k], 0.02] 
+        # End point
+        end   = [X_pred[0, k+1], X_pred[1, k+1], 0.02]
+        
+        p.addUserDebugLine(
+            lineFromXYZ=start,
+            lineToXYZ=end,
+            lineColorRGB=[0, 1, 0], # Green color
+            lineWidth=3,
+            lifeTime=lifetime # Disappears automatically after 0.1s
+        )

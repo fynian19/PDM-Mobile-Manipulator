@@ -5,7 +5,7 @@ import numpy as np
 import pinocchio as pin
 import cvxpy as cp
 
-from MPC import MPCController
+from MPC import MPCController, draw_mpc_path
 
 
 # Setup Pinocchio Model ONCE
@@ -41,37 +41,53 @@ p.setJointMotorControlArray(
     p.VELOCITY_CONTROL, 
     forces=np.zeros(len(controlled_joints))
 )
+# --- DEBUG: CHECK JOINT ORDER ---
+print("\n--- JOINT ORDER CHECK ---")
+print(f"Pinocchio (nq={pin_model.nq}):")
+for name in pin_model.names:
+    print(f" - {name}")
 
-# Create a visual target (Red Sphere)
-target_pos_vis = [0.2, -1.0, 0.0] # x, y, arm_height
-target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
-p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
+print("\nPyBullet Controlled Joints:")
+for joint_id in controlled_joints:
+    info = p.getJointInfo(robot_id, joint_id)
+    print(f" - ID {joint_id}: {info[1].decode()}")
+print("-------------------------\n")
+
 
 # ==========================================
 # 3. MAIN CONTROL LOOP
 # ==========================================
 
-dt = 0.05  # 20 Hz MPC
+dt = 0.02  # 50 Hz MPC
+no_steps = 10 # Number of physics steps per MPC step
+
 u_applied = np.zeros(5) # Start with 0 torque
 
 # Define Reference State (Where we want to go)
-# [x=2, y=1, theta=0, arm1=0, arm2=0, velocities=0...]
-x_ref = np.array([0.2, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+x_ref = np.array([2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+# Create a visual target (Red Sphere)
+target_pos_vis = x_ref[:3] # x, y, arm_height
+target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
+p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
 
 print("Starting MPC Loop...")
-mpc = MPCController(urdf_path, x_ref)
+mpc = MPCController(urdf_path, x_ref, dt*no_steps)
+sim_step_counter = 0
 while True:
     start_time = time.time()
     
     # --- A. READ STATE FROM PYBULLET ---
     joint_states = p.getJointStates(robot_id, controlled_joints)
     q_current = np.array([s[0] for s in joint_states])
+    print(f"Current Joint Positions: {q_current}")
     v_current = np.array([s[1] for s in joint_states])
     
     # --- B. LINEARIZE DYNAMICS (Pinocchio) ---
     # We pass the 'pin_data' object so it reuses memory
     #Ac, Bc, d = get_affine_dynamics(pin_model, pin_data, q_current, v_current, u_applied)
-    
+
+
     # --- C. DISCRETIZE ---
     #Ad = np.eye(10) + Ac * dt
     #Bd = Bc * dt
@@ -79,23 +95,25 @@ while True:
     
     # --- D. SOLVE MPC ---
     #x_current = np.concatenate([q_current, v_current])
-    u_optimal = mpc.get_control_action(q_current, v_current, u_applied)
-    
+    u_optimal, X_pred = mpc.get_control_action(q_current, v_current, u_applied)
+    #if sim_step_counter % 5 == 0:
+    #    # Increase lifetime so it stays visible until the next draw
+    #    draw_mpc_path(p, X_pred, lifetime=0.1)
+
+    print(f"Optimal Control: {u_optimal}")
     # --- E. APPLY CONTROL (Torque) ---
     # Clamp safety limits (PyBullet can explode with huge torques)
-    u_applied = np.clip(u_optimal, -1000, 1000)
+    u_applied = np.clip(u_optimal, -500, 500)
     
-    p.setJointMotorControlArray(
-        robot_id, 
-        controlled_joints, 
-        p.TORQUE_CONTROL, 
-        forces=u_applied
-    )
     
-    # --- F. STEP SIMULATION ---
-    p.stepSimulation()
+    # Step physics 12 times (12 * 1/240s = 0.05s)
+    for _ in range(no_steps): 
+        p.setJointMotorControlArray(robot_id, controlled_joints, p.TORQUE_CONTROL, forces=u_applied)
+        p.stepSimulation()
     
-    # Try to maintain real-time sync (simplistic)
+    # --- G. REAL-TIME SYNC ---
+    # Now we sleep only if the calculation + physics was faster than 0.05s
     elapsed = time.time() - start_time
     if elapsed < dt:
         time.sleep(dt - elapsed)
+    sim_step_counter += 1

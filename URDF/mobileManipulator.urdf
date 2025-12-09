@@ -62,7 +62,7 @@
         <axis xyz="1 0 0"/>
         <parent link="world"/>
         <child link="mobile_x_link"/>
-        <limit effort="87" velocity="2"/>
+        <limit effort="1000" velocity="10"/>
     </joint>
 
     <joint name="joint_mobile_y" type="prismatic">
@@ -70,7 +70,7 @@
         <axis xyz="0 1 0"/>
         <parent link="mobile_x_link"/>
         <child link="mobile_y_link"/>
-        <limit effort="87" velocity="2"/>
+        <limit effort="1000" velocity="10"/>
     </joint>
 
     <joint name="joint_mobile_theta" type="revolute">
@@ -78,7 +78,7 @@
         <axis xyz="0 0 1"/>
         <parent link="mobile_y_link"/>
         <child link="base_main_link"/>
-        <limit effort="87" velocity="2"/>
+        <limit effort="1000" velocity="10"/>
     </joint>
 
     <!-- =====================================
@@ -111,7 +111,7 @@
     <joint name="joint_base_to_upper_arm" type="revolute">
         <origin xyz="0 0 0.2"/>
         <axis xyz="0 1 0"/>
-        <limit effort="1000" velocity="0.5" lower="-1.8" upper="1.8"/>
+        <limit effort="1000" velocity="3" lower="-1.8" upper="1.8"/>
         <parent link="base_main_link"/>
         <child link="upper_arm_link"/>
     </joint>
@@ -146,7 +146,7 @@
     <joint name="joint_upper_to_lower_arm" type="revolute">
         <origin xyz="0 0 1.0"/>
         <axis xyz="0 1 0"/>
-        <limit effort="1000" velocity="0.5" lower="-2.1" upper="2.1"/>
+        <limit effort="1000" velocity="3" lower="-2.1" upper="2.1"/>
         <parent link="upper_arm_link"/>
         <child link="lower_arm_link"/>
     </joint>
