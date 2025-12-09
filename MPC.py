@@ -5,7 +5,7 @@ import cvxpy as cp
 import scipy
 class MPCController:
 
-    def __init__(self, urdf_path, x_ref, dt, N=20):
+    def __init__(self, urdf_path, x_ref, dt, N=10):
         self.dt = dt
         self.N = N 
         self.x_ref_val = x_ref
@@ -123,6 +123,54 @@ class MPCController:
 # ==========================================
 # 2. SETUP PYBULLET SIMULATION
 # ==========================================
+
+class MPCVisualizer:
+    def __init__(self, p_client):
+        self.p = p_client
+        self.line_ids = []  # Stores the integer IDs of the debug lines
+        self.prev_horizon = 0
+
+    def draw_trajectory(self, X_pred):
+        """
+        Updates the green MPC trajectory lines.
+        X_pred: (nx, N+1) array
+        """
+        if X_pred is None: return
+
+        # Number of segments to draw
+        N = X_pred.shape[1] - 1
+        
+        # 1. If horizon changed (or first run), clear old lines and reset
+        if len(self.line_ids) != N:
+            for line_id in self.line_ids:
+                self.p.removeUserDebugItem(line_id)
+            self.line_ids = [-1] * N # Initialize with -1 (meaning "not created yet")
+
+        # 2. Update lines (Move them, don't delete them)
+        for k in range(N):
+            start = [X_pred[0, k],   X_pred[1, k],   0.02]
+            end   = [X_pred[0, k+1], X_pred[1, k+1], 0.02]
+            
+            if self.line_ids[k] == -1:
+                # CREATE for the first time
+                self.line_ids[k] = self.p.addUserDebugLine(
+                    lineFromXYZ=start,
+                    lineToXYZ=end,
+                    lineColorRGB=[0, 1, 0],
+                    lineWidth=3,
+                    lifeTime=0 # 0 means "persist forever" (until we remove it)
+                )
+            else:
+                # UPDATE existing line (Zero overhead)
+                self.p.addUserDebugLine(
+                    lineFromXYZ=start,
+                    lineToXYZ=end,
+                    lineColorRGB=[0, 1, 0],
+                    lineWidth=3,
+                    lifeTime=0,
+                    replaceItemUniqueId=self.line_ids[k] # <--- THE KEY FIX
+                )
+                
 def draw_mpc_path(p, X_pred, lifetime):
     """
     Draws the predicted MPC trajectory in PyBullet.

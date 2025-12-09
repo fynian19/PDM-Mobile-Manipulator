@@ -5,7 +5,7 @@ import numpy as np
 import pinocchio as pin
 import cvxpy as cp
 
-from MPC import MPCController, draw_mpc_path
+from MPC import MPCController, draw_mpc_path, MPCVisualizer
 
 
 # Setup Pinocchio Model ONCE
@@ -73,6 +73,8 @@ p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vi
 
 print("Starting MPC Loop...")
 mpc = MPCController(urdf_path, x_ref, dt*no_steps)
+viz = MPCVisualizer(p)
+
 sim_step_counter = 0
 while True:
     start_time = time.time()
@@ -96,8 +98,9 @@ while True:
     # --- D. SOLVE MPC ---
     #x_current = np.concatenate([q_current, v_current])
     u_optimal, X_pred = mpc.get_control_action(q_current, v_current, u_applied)
+    viz.draw_trajectory(X_pred)
     #if sim_step_counter % 5 == 0:
-    #    # Increase lifetime so it stays visible until the next draw
+        # Increase lifetime so it stays visible until the next draw
     #    draw_mpc_path(p, X_pred, lifetime=0.1)
 
     print(f"Optimal Control: {u_optimal}")
