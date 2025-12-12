@@ -3,65 +3,35 @@ import pybullet_data
 import time
 import math
 
-# Connect to PyBullet
-p.connect(p.GUI)
+from environment_loader import load_environment_from_txt  # <-- the function above
 
-# Hide PyBullet debug UI clutter
+
+# ======================================================================
+# PYBULLET INITIALIZATION
+# ======================================================================
+
+p.connect(p.GUI)
+p.setAdditionalSearchPath(pybullet_data.getDataPath())
 p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
 p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
-p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
-p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
-p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
-
-p.setAdditionalSearchPath(pybullet_data.getDataPath())
 p.setGravity(0, 0, 0)
 
-# Load environment
 p.loadURDF("plane.urdf")
 robot = p.loadURDF("URDF/mobileManipulator.urdf")
 
-# -------- ADD OBSTACLES HERE --------
 
-def create_box_obstacle(position, half_extents, color):
-    col = p.createCollisionShape(
-        p.GEOM_BOX,
-        halfExtents=half_extents
-    )
-    vis = p.createVisualShape(
-        p.GEOM_BOX,
-        halfExtents=half_extents,
-        rgbaColor=color
-    )
-    body = p.createMultiBody(
-        baseMass=0,  # static obstacle
-        baseCollisionShapeIndex=col,
-        baseVisualShapeIndex=vis,
-        basePosition=position
-    )
-    return body
+# ======================================================================
+# LOAD ENVIRONMENT
+# ======================================================================
 
-# Wall in front
-create_box_obstacle(
-    position=[3, 0, 0.5],
-    half_extents=[0.1, 2.0, 0.5],
-    color=[1, 0, 0, 1]
-)
+obstacle_ids = load_environment_from_txt("obstacles.txt")
+print(f"Loaded {len(obstacle_ids)} obstacles.")
 
-# Side block
-create_box_obstacle(
-    position=[1.5, 1.5, 0.5],
-    half_extents=[0.5, 0.5, 0.5],
-    color=[0, 0, 1, 1]
-)
 
-# Pillar
-create_box_obstacle(
-    position=[2.0, -1.0, 1.0],
-    half_extents=[0.3, 0.3, 1.0],
-    color=[0, 1, 0, 1]
-)
+# ======================================================================
+# JOINT MAP
+# ======================================================================
 
-# -------- Build joint map --------
 joint_map = {}
 for i in range(p.getNumJoints(robot)):
     info = p.getJointInfo(robot, i)
@@ -80,14 +50,18 @@ for j in range(p.getNumJoints(robot)):
         force=100
     )
 
-# Arm joint IDs (renamed)
+# Arm joints
 arm_joints = [
     joint_map["joint_base_to_upper_arm"],
     joint_map["joint_upper_to_lower_arm"]
 ]
 
-# -------- Main simulation loop --------
+# ======================================================================
+# MAIN SIMULATION LOOP
+# ======================================================================
+
 for step in range(800):
+
     # Move base forward
     p.setJointMotorControl2(
         robot,
@@ -117,11 +91,14 @@ for step in range(800):
         force=500
     )
 
-    # Step simulation
     p.stepSimulation()
-    time.sleep(1 / 240)
+    time.sleep(1/240)
 
-# -------- Stop motion --------
+# ======================================================================
+# STOP MOTION AFTER SIM
+# ======================================================================
+
+# Stop base
 p.setJointMotorControl2(
     robot,
     joint_map["joint_mobile_x"],
@@ -130,6 +107,7 @@ p.setJointMotorControl2(
     force=100
 )
 
+# Reset arm
 for jid in arm_joints:
     p.setJointMotorControl2(
         robot,
