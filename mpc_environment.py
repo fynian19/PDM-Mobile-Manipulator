@@ -5,7 +5,9 @@ import numpy as np
 import pinocchio as pin
 import cvxpy as cp
 import matplotlib.pyplot as plt
+
 from MPC import MPCController, MPCVisualizer, get_clamped_reference
+from environment_loader import load_environment_from_txt, _create_cylinder  # <-- the function above
 
 
 # Setup Pinocchio Model ONCE
@@ -21,6 +23,15 @@ p.loadURDF("plane.urdf")
 
 # Load Robot
 robot_id = p.loadURDF(urdf_path, useFixedBase=True) # It acts fixed because of the Prismatic joints
+
+# --- OBSTACLE DEFINITION ---
+# Defined here so we can pass it to MPC
+obs_params = {
+    'pos': [2.0, 1.5, 0.0], 
+    'radius': 0.5, 
+    'height': 3.0
+}
+_create_cylinder(obs_params['pos'], obs_params['radius'], obs_params['height'], [1, 0, 0, 1])
 
 # Setup Joints
 joint_map = {}
@@ -43,17 +54,17 @@ p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, for
 
 # Sim setup
 dt = 0.02  # PyBullet physics time step
-no_steps = 15 # Number of physics steps per MPC step
+no_steps = 10 # Number of physics steps per MPC step
 
 # Define Reference State (Where we want to go)
-x_ref = np.array([30, 7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+x_ref = np.array([7, 7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 # Create a visual target (Red Sphere)
 target_pos_vis = x_ref[:3] # x, y, arm_height
 target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
 p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
 
-mpc = MPCController(urdf_path, x_ref, dt*no_steps)
+mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=20, obstacle_params=obs_params)
 viz = MPCVisualizer(p)
 
 u_applied = np.zeros(5) # Start with 0 torque
@@ -94,7 +105,7 @@ try:
         
         # --- D. SOLVE MPC ---
         #print(mpc.get_control_action(q_current, v_current, u_applied))
-        x_ref_local = get_clamped_reference(x_curr_vec, x_ref, max_lookahead=3)
+        x_ref_local = get_clamped_reference(x_curr_vec, x_ref, max_lookahead=5)
         
         # Update MPC with this new local target
         mpc.x_ref_val = x_ref_local

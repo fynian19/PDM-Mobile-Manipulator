@@ -41,7 +41,7 @@ def get_clamped_reference(x_current, x_global, max_lookahead=3.0):
 # 1. MPC CONTROLLER CLASS
 class MPCController:
 
-    def __init__(self, urdf_path, x_ref, dt, N=10):
+    def __init__(self, urdf_path, x_ref, dt, N=10, obstacle_params=None):
         self.dt = dt
         self.N = N 
         self.x_ref_val = x_ref
@@ -51,6 +51,9 @@ class MPCController:
         self.data = self.model.createData() 
         self.nx = self.model.nv * 2
         self.nu = self.model.nv
+
+        self.x_ref_val = x_ref
+        self.obstacle_params = obstacle_params # Store obstacle info
 
         # 2. Weights (Store as numpy arrays for math)
         self.Q_diag = np.array([100, 100, 50, 50, 50] + [10, 10, 5, 5, 5]) 
@@ -79,6 +82,41 @@ class MPCController:
         R_mat = np.diag(self.R_diag)
         self.P_val = scipy.linalg.solve_discrete_are(Ad, Bd, Q_mat, R_mat)
 
+    def _compute_obstacle_plane(self, q_current):
+        """
+        Calculates the separating plane (Normal n, Distance d)
+        Constraint: n.T @ [x,y] >= d
+        """
+        if self.obstacle_params is None:
+            # No obstacle: Return dummy constraint (0 >= -Inf)
+            return np.zeros(2), np.array([-1000.0])
+
+        # 1. Extract Positions
+        robot_pos = q_current[:2] # x, y
+        obs_pos = np.array(self.obstacle_params['pos'])[:2] # x, y
+        obs_rad = self.obstacle_params['radius']
+        
+        # 2. Compute Normal Vector (from Obstacle -> Robot)
+        diff = robot_pos - obs_pos
+        dist = np.linalg.norm(diff)
+        
+        # Safety margin (Robot radius approx 0.5m)
+        safety_margin = 0.6 
+        
+        if dist < 1e-3:
+            # Singularity (Robot inside obstacle center) - Push X+
+            normal = np.array([1.0, 0.0])
+        else:
+            normal = diff / dist
+            
+        # 3. Compute Distance Limit (d)
+        # The wall is located at: Obstacle_Center + Normal * (Radius + Margin)
+        # d = normal . point_on_wall
+        point_on_wall = obs_pos + normal * (obs_rad + safety_margin)
+        d_val = np.dot(normal, point_on_wall)
+        
+        return normal, np.array([d_val])
+
     def _setup_mpc_problem(self):
         """
         Defines the MPC problem symbolically ONCE.
@@ -98,7 +136,11 @@ class MPCController:
         # --- Cost & Constraints ---
         cost = 0
         constraints = [self.X[:, 0] == self.p_x0]
-        
+
+        # --- NEW: Obstacle Constraint Parameters ---
+        self.p_obs_n = cp.Parameter((2,), name="obs_n") # Normal vector
+        self.p_obs_d = cp.Parameter((1,), name="obs_d") # Scalar distance
+
         # Pre-compute sqrt matrices for efficient 'sum_squares' (Standard CVXPY trick)
         Q_sqrt = np.sqrt(self.Q_diag)
         R_sqrt = np.sqrt(self.R_diag)
@@ -116,6 +158,10 @@ class MPCController:
             constraints += [self.U[:, k] <= [30, 30, 30, 10, 10]]
             constraints += [self.U[:, k] >= [-30, -30, -30, -10, -10]]
 
+            # --- OBSTACLE CONSTRAINT ---
+            # n.T * pos >= d
+            constraints += [self.p_obs_n @ self.X[:2, k+1] >= self.p_obs_d]
+            
         # Terminal Cost (Using P)
         term_error = self.X[:, self.N] - self.p_xref
         cost += cp.quad_form(term_error, cp.psd_wrap(self.P_val))
@@ -135,6 +181,11 @@ class MPCController:
         self.p_x0.value = np.concatenate([q, v])
         self.p_xref.value = self.x_ref_val
         
+        # Update Obstacle Params
+        n_val, d_val = self._compute_obstacle_plane(q)
+        self.p_obs_n.value = n_val
+        self.p_obs_d.value = d_val
+
         try:
             self.prob.solve(
                 solver=cp.OSQP, 
