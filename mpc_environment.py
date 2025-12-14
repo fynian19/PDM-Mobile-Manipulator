@@ -26,12 +26,31 @@ robot_id = p.loadURDF(urdf_path, useFixedBase=True) # It acts fixed because of t
 
 # --- OBSTACLE DEFINITION ---
 # Defined here so we can pass it to MPC
+# Load obstacles
+obstacles = np.array([["x_position","y_position","z_position","radius","height"]])
+
+with open("test_obs.txt", "r") as f:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        parts = line.split()
+        shape = parts[0].upper()
+
+        # Cylinder
+        if shape == "CYL":
+            _, px, py, pz, radius, height, r, g, b = parts
+            obstacles = np.append(obstacles, [[float(px), float(py), float(pz), float(radius), float(height)]], axis=0)
+
 obs_params = {
     'pos': [2.0, 1.5, 0.0], 
     'radius': 0.5, 
     'height': 3.0
 }
-_create_cylinder(obs_params['pos'], obs_params['radius'], obs_params['height'], [1, 0, 0, 1])
+#_create_cylinder(obs_params['pos'], obs_params['radius'], obs_params['height'], [1, 0, 0, 1])
+obstacle_ids = load_environment_from_txt("test_obs.txt")
+print(f"Loaded {len(obstacle_ids)} obstacles.")
 
 # Setup Joints
 joint_map = {}
