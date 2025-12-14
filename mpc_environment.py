@@ -5,7 +5,7 @@ import numpy as np
 import pinocchio as pin
 import cvxpy as cp
 import matplotlib.pyplot as plt
-from MPC import MPCController, MPCVisualizer
+from MPC import MPCController, MPCVisualizer, get_clamped_reference
 
 
 # Setup Pinocchio Model ONCE
@@ -43,10 +43,10 @@ p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, for
 
 # Sim setup
 dt = 0.02  # PyBullet physics time step
-no_steps = 7 # Number of physics steps per MPC step
+no_steps = 15 # Number of physics steps per MPC step
 
 # Define Reference State (Where we want to go)
-x_ref = np.array([-1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+x_ref = np.array([30, 7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 # Create a visual target (Red Sphere)
 target_pos_vis = x_ref[:3] # x, y, arm_height
@@ -80,7 +80,9 @@ try:
         joint_states = p.getJointStates(robot_id, controlled_joints)
         q_current = np.array([s[0] for s in joint_states])
         v_current = np.array([s[1] for s in joint_states])
-        print(f"Current Joint Positions: {q_current}")
+        # Combine into state vector x
+        x_curr_vec = np.concatenate([q_current, v_current])
+        print(f"Current state: {x_curr_vec}")
 
         # --- B. LOG DATA ---
         current_time = start_time - sim_start_time
@@ -88,11 +90,17 @@ try:
         log_q.append(q_current)
         log_v.append(v_current)
         log_u.append(u_applied) # Log the PREVIOUS applied torque (or current if you prefer)
-        log_ref.append(x_ref)
+        #log_ref.append(x_ref)
         
         # --- D. SOLVE MPC ---
-        u_optimal, X_pred = mpc.get_control_action(q_current, v_current, u_applied)
+        #print(mpc.get_control_action(q_current, v_current, u_applied))
+        x_ref_local = get_clamped_reference(x_curr_vec, x_ref, max_lookahead=3)
+        
+        # Update MPC with this new local target
+        mpc.x_ref_val = x_ref_local
 
+        u_optimal, X_pred = mpc.get_control_action(q_current, v_current, u_applied)
+        log_ref.append(x_ref_local)
         # --- D. VISUALIZE MPC TRAJECTORY ---
         viz.draw_trajectory(X_pred)
 
@@ -115,8 +123,6 @@ try:
 except KeyboardInterrupt:
     print("\nSimulation Interrupted by User.")
 
-import matplotlib.pyplot as plt
-import numpy as np
 
 # ==========================================
 # PLOTTING

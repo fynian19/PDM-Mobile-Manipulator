@@ -3,6 +3,42 @@ import numpy as np
 import pinocchio as pin
 import cvxpy as cp
 import scipy
+
+
+def get_clamped_reference(x_current, x_global, max_lookahead=3.0):
+    """
+    Creates a temporary local target 'max_lookahead' meters away 
+    in the direction of the global target.
+    
+    x_current: [x, y, theta, ...]
+    x_global:  [x_goal, y_goal, theta_goal, ...]
+    """
+    # Extract positions (Base X, Base Y)
+    curr_pos = x_current[:2]
+    glob_pos = x_global[:2]
+    
+    # Compute vector to target
+    diff = glob_pos - curr_pos
+    dist = np.linalg.norm(diff)
+    
+    # If we are far away, clamp the target
+    if dist > max_lookahead:
+        # Normalize direction and scale by lookahead distance
+        direction = diff / dist
+        local_pos = curr_pos + direction * max_lookahead
+        
+        # Create new reference vector
+        x_ref_local = x_global.copy()
+        x_ref_local[0] = local_pos[0]
+        x_ref_local[1] = local_pos[1]
+        
+        return x_ref_local
+    else:
+        # We are close enough, go straight to the global target
+        return x_global
+
+# ==========================================
+# 1. MPC CONTROLLER CLASS
 class MPCController:
 
     def __init__(self, urdf_path, x_ref, dt, N=10):
@@ -17,8 +53,8 @@ class MPCController:
         self.nu = self.model.nv
 
         # 2. Weights (Store as numpy arrays for math)
-        self.Q_diag = np.array([100, 100, 100, 100, 100] + [1, 1, 1, 1, 1]) 
-        self.R_diag = np.array([0.00001] * self.nu) # Fixed your R shape logic
+        self.Q_diag = np.array([100, 100, 50, 50, 50] + [10, 10, 5, 5, 5]) 
+        self.R_diag = np.array([0.1] * self.nu) # Fixed your R shape logic
         
         # 3. Compute Terminal Cost P
         self._compute_terminal_cost()
@@ -77,8 +113,8 @@ class MPCController:
             constraints += [self.X[:, k+1] == self.p_Ad @ self.X[:, k] + self.p_Bd @ self.U[:, k] + self.p_dd]
             
             # Constraints (Make sure limits match your URDF)
-            constraints += [self.U[:, k] <= [50, 50, 50, 10, 10]]
-            constraints += [self.U[:, k] >= [-50, -50, -50, -10, -10]]
+            constraints += [self.U[:, k] <= [30, 30, 30, 10, 10]]
+            constraints += [self.U[:, k] >= [-30, -30, -30, -10, -10]]
 
         # Terminal Cost (Using P)
         term_error = self.X[:, self.N] - self.p_xref
@@ -99,19 +135,27 @@ class MPCController:
         self.p_x0.value = np.concatenate([q, v])
         self.p_xref.value = self.x_ref_val
         
-        # 3. Solve (Fast)
         try:
-            # warm_start=True reuses the previous solution as a guess
-            self.prob.solve(solver=cp.OSQP, warm_start=True)
+            self.prob.solve(
+                solver=cp.OSQP, 
+                warm_start=True,
+                eps_abs=1e-3, # Looser tolerance (was default 1e-5)
+                eps_rel=1e-3, 
+                max_iter=1000 # Give it more time if needed
+            )
         except Exception as e:
-            print(f"Solver failed: {e}")
-            return np.zeros(self.nu)
+            print(f"Solver crashed: {e}")
+            # FIX 1: Return a tuple (u, X) even on crash
+            return np.zeros(self.nu), None
 
-        if self.prob.status != cp.OPTIMAL:
-            print(f"Infeasible: {self.prob.status}")
-            return np.zeros(self.nu)
+        # FIX 2: Accept "optimal_inaccurate" as success
+        # It just means the solver reached the limit of floating point precision
+        if self.prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            print(f"Solver failed: {self.prob.status}")
+            # FIX 3: Return tuple on feasibility failure
+            return np.zeros(self.nu), None
             
-        # Return first control action
+        # Success path
         return self.U[:, 0].value, self.X.value
     
     def dummy_mpc(self):
