@@ -62,6 +62,23 @@ def _create_sphere(pos, radius, color):
     )
 
 
+def _parse_color(parts, start_idx):
+    """
+    Parses r g b [a] starting at start_idx.
+    If alpha is missing, defaults to 1.0.
+    """
+    r = float(parts[start_idx])
+    g = float(parts[start_idx + 1])
+    b = float(parts[start_idx + 2])
+
+    if len(parts) > start_idx + 3:
+        a = float(parts[start_idx + 3])
+    else:
+        a = 1.0
+
+    return [r, g, b, a]
+
+
 # ======================================================================
 # ENVIRONMENT LOADER
 # ======================================================================
@@ -71,9 +88,9 @@ def load_environment_from_txt(path):
     Reads an obstacle description file and creates all objects in PyBullet.
 
     Supported formats:
-    BOX px py pz sx sy sz r g b
-    CYL px py pz radius height r g b
-    SPH px py pz radius r g b
+    BOX px py pz sx sy sz r g b [a]
+    CYL px py pz radius height r g b [a]
+    SPH px py pz radius r g b [a]
 
     Returns:
         list of created body unique IDs
@@ -92,28 +109,37 @@ def load_environment_from_txt(path):
 
             # ------------------- BOX -------------------
             if shape == "BOX":
-                _, px, py, pz, sx, sy, sz, r, g, b = parts
-                pos = [float(px), float(py), float(pz)]
-                sx, sy, sz = float(sx), float(sy), float(sz)
-                color = [float(r), float(g), float(b), 1.0]
-                obstacle_ids.append(_create_box(pos, [sx, sy, sz], color))
+                # BOX px py pz sx sy sz r g b [a]
+                px, py, pz = map(float, parts[1:4])
+                sx, sy, sz = map(float, parts[4:7])
+                color = _parse_color(parts, 7)
+
+                obstacle_ids.append(
+                    _create_box([px, py, pz], [sx, sy, sz], color)
+                )
 
             # ------------------- CYLINDER -------------------
             elif shape == "CYL":
-                _, px, py, pz, radius, height, r, g, b = parts
-                pos = [float(px), float(py), float(pz)]
-                radius = float(radius)
-                height = float(height)
-                color = [float(r), float(g), float(b), 1.0]
-                obstacle_ids.append(_create_cylinder(pos, radius, height, color))
+                # CYL px py pz radius height r g b [a]
+                px, py, pz = map(float, parts[1:4])
+                radius = float(parts[4])
+                height = float(parts[5])
+                color = _parse_color(parts, 6)
+
+                obstacle_ids.append(
+                    _create_cylinder([px, py, pz], radius, height, color)
+                )
 
             # ------------------- SPHERE -------------------
             elif shape == "SPH":
-                _, px, py, pz, radius, r, g, b = parts
-                pos = [float(px), float(py), float(pz)]
-                radius = float(radius)
-                color = [float(r), float(g), float(b), 1.0]
-                obstacle_ids.append(_create_sphere(pos, radius, color))
+                # SPH px py pz radius r g b [a]
+                px, py, pz = map(float, parts[1:4])
+                radius = float(parts[4])
+                color = _parse_color(parts, 5)
+
+                obstacle_ids.append(
+                    _create_sphere([px, py, pz], radius, color)
+                )
 
             else:
                 print(f"[WARN] Unknown shape type: {shape}")

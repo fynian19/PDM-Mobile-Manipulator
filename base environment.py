@@ -24,7 +24,7 @@ robot = p.loadURDF("URDF/mobileManipulator.urdf")
 # LOAD ENVIRONMENT
 # ======================================================================
 
-obstacle_ids = load_environment_from_txt("obstacles.txt")
+obstacle_ids = load_environment_from_txt("scenario_2_obstacles.txt")
 print(f"Loaded {len(obstacle_ids)} obstacles.")
 
 

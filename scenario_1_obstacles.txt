@@ -1,0 +1,63 @@
+# ==================== HALLWAY WALLS ====================
+# Short hallway along Y axis
+
+# Left wall
+BOX  -3.0   0.0   1.0    0.1  10.0  2.0    0.90 0.85 0.75
+
+# Right wall
+BOX   3.0   0.0   1.0    0.1  10.0  2.0    0.90 0.85 0.75
+
+# Back wall
+BOX   0.0  -10.0  1.0    3.0  0.1  2.0    0.90 0.85 0.75
+
+# Front wall (behind goal)
+BOX   0.0   10.0  1.0    3.0  0.1  2.0    0.90 0.85 0.75
+
+
+# ==================== DOOR (LEFT SIDE) ====================
+BOX  0.0   -9.9  1.0    0.8  0.05  1.6    0.65 0.50 0.35
+
+
+# ==================== WINDOW (LEFT SIDE) ====================
+BOX  -2.9   -7.5  1.5    0.05  1.0  0.8    0.88 0.90 0.95
+
+
+# ==================== OBSTACLES ====================
+
+# Large central circular pedestal (front)
+CYL   0.0    -4.5   0.6     0.9   1.2    0.65 0.50 0.35
+
+# Obstacle 1: left behind first
+BOX  1.7    0.0  0.5    0.4   0.4  0.5    0.65 0.50 0.35
+
+# Obstacle 2: right behind first
+BOX   -1.7    0.0  0.5    0.4   0.4  0.5    0.65 0.50 0.35
+
+# Obstacle 3: left behind first
+BOX  -0.7    4.0  0.5    0.4   0.4  0.5    0.65 0.50 0.35
+
+# Obstacle 4: right behind first
+BOX   0.7    4.0  0.5    0.4   0.4  0.5    0.65 0.50 0.35
+
+
+# ==================== GOAL PEDESTAL ====================
+BOX   0.0    8.0  0.25   0.4   0.4  0.5    0.65 0.50 0.35
+
+# Goal cube
+BOX   0.0    8.0  0.9    0.2   0.2  0.3    0.0  1.0  0.0
+
+# ==================== GLASS ON PEDESTALS ====================
+
+# Glass on large central circular pedestal
+CYL   0.0   -4.5   1.6     0.85  1.0    0.88 0.90 0.95
+
+
+# Glass on rear pedestals (row 1)
+BOX   1.7    0.0   1.1     0.35   0.35  0.4    0.88 0.90 0.95
+BOX  -1.7    0.0   1.1     0.35   0.35  0.4    0.88 0.90 0.95
+
+
+# Glass on rear pedestals (row 2)
+BOX  -0.7    4.0   1.1     0.35   0.35  0.4    0.88 0.90 0.95
+BOX   0.7    4.0   1.1     0.35   0.35  0.4    0.88 0.90 0.95
+
