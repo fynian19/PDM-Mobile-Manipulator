@@ -24,12 +24,15 @@ p.loadURDF("plane.urdf")
 # Load Robot
 robot_id = p.loadURDF(urdf_path, useFixedBase=True) # It acts fixed because of the Prismatic joints
 
+# Get path to obstacles
+obs_PATH = "test_obs.txt"
+
 # --- OBSTACLE DEFINITION ---
 # Defined here so we can pass it to MPC
 # Load obstacles
-obstacles = np.array([["x_position","y_position","z_position","radius","height"]])
+obstacles = np.empty((0, 5), dtype=float)
 
-with open("test_obs.txt", "r") as f:
+with open(obs_PATH, "r") as f:
     for line in f:
         line = line.strip()
         if not line or line.startswith("#"):
@@ -48,8 +51,8 @@ obs_params = {
     'radius': 0.5, 
     'height': 3.0
 }
-#_create_cylinder(obs_params['pos'], obs_params['radius'], obs_params['height'], [1, 0, 0, 1])
-obstacle_ids = load_environment_from_txt("test_obs.txt")
+
+obstacle_ids = load_environment_from_txt(obs_PATH)
 print(f"Loaded {len(obstacle_ids)} obstacles.")
 
 # Setup Joints
@@ -83,7 +86,7 @@ target_pos_vis = x_ref[:3] # x, y, arm_height
 target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
 p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
 
-mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=20, obstacle_params=obs_params)
+mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=20, obstacle_params=obstacles)
 viz = MPCVisualizer(p)
 
 u_applied = np.zeros(5) # Start with 0 torque

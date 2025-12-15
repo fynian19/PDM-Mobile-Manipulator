@@ -93,8 +93,8 @@ class MPCController:
 
         # 1. Extract Positions
         robot_pos = q_current[:2] # x, y
-        obs_pos = np.array(self.obstacle_params['pos'])[:2] # x, y
-        obs_rad = self.obstacle_params['radius']
+        obs_pos = self.obstacle_params[0,:2] # x, y
+        obs_rad = self.obstacle_params[0,3]
         
         # 2. Compute Normal Vector (from Obstacle -> Robot)
         diff = robot_pos - obs_pos
