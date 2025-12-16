@@ -1,12 +1,13 @@
 import pybullet as p
 import pybullet_data
+import math
 
 
 # ======================================================================
 # INTERNAL HELPERS
 # ======================================================================
 
-def _create_box(pos, half_extents, color):
+def _create_box(pos, half_extents, color, orientation=None):
     col = p.createCollisionShape(
         shapeType=p.GEOM_BOX,
         halfExtents=half_extents
@@ -16,15 +17,20 @@ def _create_box(pos, half_extents, color):
         halfExtents=half_extents,
         rgbaColor=color
     )
+
+    if orientation is None:
+        orientation = [0, 0, 0, 1]
+
     return p.createMultiBody(
         baseMass=0,
         baseCollisionShapeIndex=col,
         baseVisualShapeIndex=vis,
-        basePosition=pos
+        basePosition=pos,
+        baseOrientation=orientation
     )
 
 
-def _create_cylinder(pos, radius, height, color):
+def _create_cylinder(pos, radius, height, color, orientation=None):
     col = p.createCollisionShape(
         shapeType=p.GEOM_CYLINDER,
         radius=radius,
@@ -36,11 +42,16 @@ def _create_cylinder(pos, radius, height, color):
         length=height,
         rgbaColor=color
     )
+
+    if orientation is None:
+        orientation = [0, 0, 0, 1]
+
     return p.createMultiBody(
         baseMass=0,
         baseCollisionShapeIndex=col,
         baseVisualShapeIndex=vis,
-        basePosition=pos
+        basePosition=pos,
+        baseOrientation=orientation
     )
 
 
@@ -54,6 +65,7 @@ def _create_sphere(pos, radius, color):
         radius=radius,
         rgbaColor=color
     )
+
     return p.createMultiBody(
         baseMass=0,
         baseCollisionShapeIndex=col,
@@ -63,20 +75,29 @@ def _create_sphere(pos, radius, color):
 
 
 def _parse_color(parts, start_idx):
-    """
-    Parses r g b [a] starting at start_idx.
-    If alpha is missing, defaults to 1.0.
-    """
     r = float(parts[start_idx])
     g = float(parts[start_idx + 1])
     b = float(parts[start_idx + 2])
 
     if len(parts) > start_idx + 3:
         a = float(parts[start_idx + 3])
-    else:
-        a = 1.0
+        return [r, g, b, a], start_idx + 4
 
-    return [r, g, b, a]
+    return [r, g, b, 1.0], start_idx + 3
+
+
+def _parse_orientation(parts, start_idx):
+    """
+    Optional roll pitch yaw (radians).
+    If not present, return identity quaternion.
+    """
+    if len(parts) >= start_idx + 3:
+        roll = float(parts[start_idx])
+        pitch = float(parts[start_idx + 1])
+        yaw = float(parts[start_idx + 2])
+        return p.getQuaternionFromEuler([roll, pitch, yaw])
+
+    return None
 
 
 # ======================================================================
@@ -84,18 +105,6 @@ def _parse_color(parts, start_idx):
 # ======================================================================
 
 def load_environment_from_txt(path):
-    """
-    Reads an obstacle description file and creates all objects in PyBullet.
-
-    Supported formats:
-    BOX px py pz sx sy sz r g b [a]
-    CYL px py pz radius height r g b [a]
-    SPH px py pz radius r g b [a]
-
-    Returns:
-        list of created body unique IDs
-    """
-
     obstacle_ids = []
 
     with open(path, "r") as f:
@@ -109,25 +118,40 @@ def load_environment_from_txt(path):
 
             # ------------------- BOX -------------------
             if shape == "BOX":
-                # BOX px py pz sx sy sz r g b [a]
+                # BOX px py pz sx sy sz r g b [a] [roll pitch yaw]
                 px, py, pz = map(float, parts[1:4])
                 sx, sy, sz = map(float, parts[4:7])
-                color = _parse_color(parts, 7)
+
+                color, idx = _parse_color(parts, 7)
+                orientation = _parse_orientation(parts, idx)
 
                 obstacle_ids.append(
-                    _create_box([px, py, pz], [sx, sy, sz], color)
+                    _create_box(
+                        [px, py, pz],
+                        [sx, sy, sz],
+                        color,
+                        orientation
+                    )
                 )
 
             # ------------------- CYLINDER -------------------
             elif shape == "CYL":
-                # CYL px py pz radius height r g b [a]
+                # CYL px py pz radius height r g b [a] [roll pitch yaw]
                 px, py, pz = map(float, parts[1:4])
                 radius = float(parts[4])
                 height = float(parts[5])
-                color = _parse_color(parts, 6)
+
+                color, idx = _parse_color(parts, 6)
+                orientation = _parse_orientation(parts, idx)
 
                 obstacle_ids.append(
-                    _create_cylinder([px, py, pz], radius, height, color)
+                    _create_cylinder(
+                        [px, py, pz],
+                        radius,
+                        height,
+                        color,
+                        orientation
+                    )
                 )
 
             # ------------------- SPHERE -------------------
@@ -135,7 +159,7 @@ def load_environment_from_txt(path):
                 # SPH px py pz radius r g b [a]
                 px, py, pz = map(float, parts[1:4])
                 radius = float(parts[4])
-                color = _parse_color(parts, 5)
+                color, _ = _parse_color(parts, 5)
 
                 obstacle_ids.append(
                     _create_sphere([px, py, pz], radius, color)
