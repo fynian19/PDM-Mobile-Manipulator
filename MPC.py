@@ -5,80 +5,59 @@ import scipy.linalg
 from eq_motion_derivation import discretize_dynamics, get_linear_dynamics
 
 # ==========================================
-# 1. GEOMETRY HELPERS (Exact Distance)
+# 1. GEOMETRY HELPERS
 # ==========================================
 
 def get_transform(pos, quat):
-    """
-    Creates 4x4 Homogeneous Matrix.
-    Robustly handles 2D (x,y) or 3D (x,y,z) positions.
-    """
     T = np.eye(4)
     T[:3, :3] = pin.Quaternion(np.array(quat)).matrix()
-    
-    # FIX: Ensure pos is 3D
-    if len(pos) == 2:
-        T[:2, 3] = pos
-        T[2, 3] = 0.0 # Default Z=0
-    else:
-        T[:3, 3] = pos
-        
+    if len(pos) == 2: T[:2, 3] = pos
+    else: T[:3, 3] = pos
     return T
 
-def dist_point_to_box(point, box_pos, box_quat, box_size):
+def dist_point_to_segment(p, a, b, radius):
     """
-    Computes exact distance and normal from a 3D point to an Oriented Box.
+    Computes distance and standard surface normal from segment [a,b] to point p.
     """
-    # Transform point to Box Frame
-    T_world_box = get_transform(box_pos, box_quat)
-    # Fast inverse for homogenous matrix (Rotation^T)
-    R_T = T_world_box[:3, :3].T
-    p_local = R_T @ (point - T_world_box[:3, 3])
+    ab = b - a
+    ap = p - a
     
-    # FIX: Ensure box_size is 3D (pad with arbitrary height if 2D)
-    if len(box_size) == 2:
-        size_3d = np.array([box_size[0], box_size[1], 1.0])
+    denom = np.dot(ab, ab)
+    if denom < 1e-6: t = 0.0
+    else: t = np.dot(ap, ab) / denom
+    
+    t_clamped = np.clip(t, 0.0, 1.0)
+    closest_point = a + t_clamped * ab
+    
+    diff = p - closest_point
+    dist_center = np.linalg.norm(diff)
+    
+    if dist_center < 1e-4:
+        normal = np.array([0, 0, 1.0]) 
     else:
-        size_3d = np.array(box_size)
+        normal = diff / dist_center 
+        
+    dist_surface = dist_center - radius
+    return dist_surface, normal
 
-    # Clamp to find closest point on surface
-    closest_local = np.clip(p_local, -size_3d, size_3d)
+def dist_point_to_box(point, box_pos, box_quat, box_size):
+    if len(box_pos) == 2: box_pos = np.append(box_pos, 0.0)
+    if len(box_size) == 2: box_size = np.append(box_size, 1.0)
     
-    # Distance and Normal in Local Frame
+    T_world_box = get_transform(box_pos, box_quat)
+    p_local = T_world_box[:3, :3].T @ (point - T_world_box[:3, 3])
+    
+    closest_local = np.clip(p_local, -np.array(box_size), np.array(box_size))
+    
     diff_local = p_local - closest_local
     dist = np.linalg.norm(diff_local)
     
     if dist < 1e-6:
-        # Inside box: push out along Z axis (fallback) or X
         normal_local = np.array([1.0, 0, 0])
         dist = -1e-4
     else:
         normal_local = diff_local / dist
 
-    # Rotate Normal to World Frame
-    normal_world = T_world_box[:3, :3] @ normal_local
-    return dist, normal_world
-
-def dist_point_to_cylinder(point, cyl_pos, cyl_quat, radius, height):
-    # Transform to Cylinder Frame
-    T_world_box = get_transform(cyl_pos, cyl_quat)
-    R_T = T_world_box[:3, :3].T
-    p_local = R_T @ (point - T_world_box[:3, 3])
-    
-    # Project to Axis (Z)
-    z_clamped = np.clip(p_local[2], -height/2, height/2)
-    axis_point = np.array([0, 0, z_clamped])
-    
-    # Radial distance
-    vec_radial = p_local - axis_point
-    dist_radial = np.linalg.norm(vec_radial)
-    
-    if dist_radial < 1e-6:
-        normal_local = np.array([1.0, 0, 0])
-    else:
-        normal_local = vec_radial / dist_radial
-        
-    dist = dist_radial - radius
     normal_world = T_world_box[:3, :3] @ normal_local
     return dist, normal_world
 
@@ -87,7 +66,6 @@ def get_clamped_reference(x_current, x_global, max_lookahead=3.0):
     glob_pos = x_global[:2]
     diff = glob_pos - curr_pos
     dist = np.linalg.norm(diff)
-    
     if dist > max_lookahead:
         direction = diff / dist
         local_pos = curr_pos + direction * max_lookahead
@@ -95,8 +73,7 @@ def get_clamped_reference(x_current, x_global, max_lookahead=3.0):
         x_ref_local[0] = local_pos[0]
         x_ref_local[1] = local_pos[1]
         return x_ref_local
-    else:
-        return x_global
+    return x_global
 
 # ==========================================
 # 2. MPC CONTROLLER CLASS
@@ -115,19 +92,23 @@ class MPCController:
         self.nx = self.model.nv * 2
         self.nu = self.model.nv
 
+        # Tuning
         self.Q_diag = np.array([100, 100, 50, 50, 50] + [10, 10, 10, 5, 5]) 
         self.R_diag = np.array([0.5] * self.nu) 
         
-        # --- FIX: ROBUST FRAME ITERATION ---
+        # --- COLLISION CHECK POINTS ---
         self.collision_frames = []
-        if self.model.existFrame("base_link"):
-            self.collision_frames.append(self.model.getFrameId("base_link"))
+        
+        # Try to find base_link ID safely
+        base_id = self.model.getFrameId("base_link")
+        if base_id < self.model.nframes:
+            self.collision_frames.append(base_id)
         
         for i, f in enumerate(self.model.frames):
             if "link" in f.name and "base" not in f.name:
                 self.collision_frames.append(i)
         
-        self.MAX_CONSTRAINTS = 10 
+        self.MAX_CONSTRAINTS = 15 
         
         self._compute_terminal_cost()
         self._setup_mpc_problem()
@@ -142,68 +123,81 @@ class MPCController:
 
     def _get_tangent_plane_constraints(self, q_current):
         """
-        Generates Linear Constraints: C @ q_next >= d
+        Generates constraints.
+        Normal vector points towards Base Center (X,Y) if safe.
         """
-        # Update Kinematics
         pin.forwardKinematics(self.model, self.data, q_current)
         pin.updateFramePlacements(self.model, self.data)
         pin.computeJointJacobians(self.model, self.data, q_current)
 
+        # Get current Base Position (X, Y)
+        # Note: q_current[0] is X, q_current[1] is Y
+        base_center_xy = q_current[:2]
+
         candidates = []
 
-        # 1. Loop over Robot Joints
         for frame_idx in self.collision_frames:
             p_robot = self.data.oMf[frame_idx].translation
-            # Get Jacobian (Translation part 3xN)
-            J_6d = pin.getFrameJacobian(self.model, self.data, frame_idx, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
-            J_lin = J_6d[:3, :] 
+            J_lin = pin.getFrameJacobian(self.model, self.data, frame_idx, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)[:3, :] 
 
-            # 2. Loop over Obstacles
             for obs in self.obstacle_list:
-                # --- EXACT GEOMETRY CHECK ---
-                if obs['type'] == 'BOX':
-                    # FIX: Handle 2D or 3D pos gracefully
-                    raw_pos = np.array(obs.get('pos', [0,0,0]))
-                    if len(raw_pos) == 2: pos = np.array([raw_pos[0], raw_pos[1], 0.0])
-                    else: pos = raw_pos
-                    
-                    quat = obs.get('quat', [0,0,0,1])
-                    size = np.array(obs.get('size', [0.1,0.1,0.1]))
-                    
-                    dist, normal = dist_point_to_box(p_robot, pos, quat, size)
-                    
-                elif obs['type'] == 'CYL':
-                    if 'pos' in obs: 
-                        raw_pos = np.array(obs['pos'])
-                        if len(raw_pos) == 2: pos = np.array([raw_pos[0], raw_pos[1], 0.0])
-                        else: pos = raw_pos
-                    else: 
-                        # Center from endpoints
-                        p0 = np.array(obs.get('p0', [0,0,0]))
-                        p1 = np.array(obs.get('p1', [0,0,1]))
-                        # Pad if p0/p1 are 2D
-                        if len(p0) == 2: p0 = np.append(p0, 0.0)
-                        if len(p1) == 2: p1 = np.append(p1, 1.0)
-                        pos = (p0+p1)/2.0
-                    
-                    quat = obs.get('quat', [0,0,0,1])
+                
+                # 1. Get Geometry Data (Dist + Surface Normal)
+                if obs['type'] == 'CYL':
+                    p0 = np.array(obs.get('p0', [0,0,0])); p1 = np.array(obs.get('p1', [0,0,1]))
+                    if len(p0)==2: p0=np.append(p0,0); 
+                    if len(p1)==2: p1=np.append(p1,1)
                     radius = obs.get('radius', 0.5)
-                    height = obs.get('height', 1.0)
-                    dist, normal = dist_point_to_cylinder(p_robot, pos, quat, radius, height)
+                    dist, n_surf = dist_point_to_segment(p_robot, p0, p1, radius)
                 
-                # --- TANGENT PLANE CONSTRAINT ---
-                d_safe = 0.2 
-                
-                # Gradient C = n^T * J
-                C_row = normal @ J_lin 
-                
-                dist_clamped = max(dist, -0.05) 
-                d_val = d_safe - dist_clamped + np.dot(C_row, q_current)
+                elif obs['type'] == 'BOX':
+                    pos = np.array(obs.get('pos', [0,0,0])); quat = obs.get('quat', [0,0,0,1])
+                    size = np.array(obs.get('size', [0.1,0.1,0.1]))
+                    if len(pos)==2: pos=np.append(pos,0)
+                    if len(size)==2: size=np.append(size,1)
+                    dist, n_surf = dist_point_to_box(p_robot, pos, quat, size)
 
+                # 2. CALCULATE "TO BASE" NORMAL
+                # Vector from Joint to Base Center (in 3D, assuming Base Z=0 or same as Joint Z for simplicity)
+                # Ideally, we want to push the joint horizontally towards the base.
+                vec_to_base = np.array([base_center_xy[0], base_center_xy[1], p_robot[2]]) - p_robot
+                
+                # Normalize
+                norm_base = np.linalg.norm(vec_to_base)
+                if norm_base > 1e-4:
+                    n_base = vec_to_base / norm_base
+                else:
+                    n_base = n_surf # Fallback if at center
+                
+                # 3. SAFETY CHECK (Dot Product)
+                # Does pushing towards the base actually move us away from the obstacle?
+                # Check alignment with the Surface Normal (n_surf).
+                # n_surf points OUT of obstacle.
+                alignment = np.dot(n_base, n_surf)
+                
+                if alignment > 0.1: 
+                    # Yes, pushing to base moves us away from obstacle. Use n_base.
+                    final_normal = n_base
+                else:
+                    # No, Base is "behind" the wall or perpendicular. Pushing there crashes.
+                    # Fallback to standard surface normal to ensure safety.
+                    final_normal = n_surf
+
+                # 4. Formulate Constraint
+                margin = 0.2 
+                C_row = final_normal @ J_lin
+                
+                if dist < margin:
+                    req_dist = dist + 0.05 
+                else:
+                    req_dist = margin
+                
+                # Constraint: C * q_next >= req - dist + C * q_curr
+                d_val = req_dist - dist + np.dot(C_row, q_current)
+                
                 candidates.append((dist, C_row, d_val))
 
-        # 3. Filter and Sort
-        candidates.sort(key=lambda x: x[0]) 
+        candidates.sort(key=lambda x: x[0])
         
         C_out = np.zeros((self.MAX_CONSTRAINTS, self.model.nq))
         d_out = np.full(self.MAX_CONSTRAINTS, -1000.0) 
@@ -215,14 +209,12 @@ class MPCController:
         return C_out, d_out
 
     def _setup_mpc_problem(self):
-        # Params
         self.p_Ad = cp.Parameter((self.nx, self.nx), name="Ad")
         self.p_Bd = cp.Parameter((self.nx, self.nu), name="Bd")
         self.p_dd = cp.Parameter((self.nx,), name="dd")
         self.p_x0 = cp.Parameter((self.nx,), name="x0")
         self.p_xref = cp.Parameter((self.nx,), name="xref")
         
-        # Tangent Plane Constraints: C * q >= d
         self.p_C = cp.Parameter((self.MAX_CONSTRAINTS, self.model.nq), name="C_mat")
         self.p_d = cp.Parameter((self.MAX_CONSTRAINTS,), name="d_vec")
 
@@ -240,20 +232,15 @@ class MPCController:
             cost += cp.sum_squares(cp.multiply(Q_sqrt, state_error)) 
             cost += cp.sum_squares(cp.multiply(R_sqrt, self.U[:, k]))
             
-            # Dynamics
             constraints += [self.X[:, k+1] == self.p_Ad @ self.X[:, k] + self.p_Bd @ self.U[:, k] + self.p_dd]
-            
-            # Input Limits
             constraints += [self.U[:, k] <= [500]*self.nu]
             constraints += [self.U[:, k] >= [-500]*self.nu]
 
-            # --- WALL BOUNDS ---
             constraints += [self.X[0, k+1] >= self.bounds['x_min']]
             constraints += [self.X[0, k+1] <= self.bounds['x_max']]
             constraints += [self.X[1, k+1] >= self.bounds['y_min']]
             constraints += [self.X[1, k+1] <= self.bounds['y_max']]
 
-            # --- TANGENT PLANE CONSTRAINTS ---
             q_next = self.X[:self.model.nq, k+1]
             constraints += [self.p_C @ q_next >= self.p_d]
 
@@ -283,7 +270,6 @@ class MPCController:
             return np.zeros(self.nu), None
             
         return self.U[:, 0].value, self.X.value
-
 # ==========================================
 # 3. VISUALIZER
 # ==========================================

@@ -29,7 +29,7 @@ robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 
 # --- LOAD OBSTACLES (Correct Way) ---
 # This function now handles BOX and CYL and gives us the math data
-obs_ids, obs_data_list = load_environment_from_txt("scenario_2_obstacles.txt")
+obs_ids, obs_data_list = load_environment_from_txt("scenario_5_obstacles.txt")
 print(f"Loaded {len(obs_ids)} obstacles.")
 
 # Setup Joints
