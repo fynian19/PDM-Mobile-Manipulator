@@ -87,16 +87,11 @@ def _parse_color(parts, start_idx):
 
 
 def _parse_orientation(parts, start_idx):
-    """
-    Optional roll pitch yaw (radians).
-    If not present, return identity quaternion.
-    """
     if len(parts) >= start_idx + 3:
         roll = float(parts[start_idx])
         pitch = float(parts[start_idx + 1])
         yaw = float(parts[start_idx + 2])
         return p.getQuaternionFromEuler([roll, pitch, yaw])
-
     return None
 
 
@@ -106,6 +101,8 @@ def _parse_orientation(parts, start_idx):
 
 def load_environment_from_txt(path):
     obstacle_ids = []
+    laser_ids = []
+    laser_base_positions = []
 
     with open(path, "r") as f:
         for line in f:
@@ -118,7 +115,6 @@ def load_environment_from_txt(path):
 
             # ------------------- BOX -------------------
             if shape == "BOX":
-                # BOX px py pz sx sy sz r g b [a] [roll pitch yaw]
                 px, py, pz = map(float, parts[1:4])
                 sx, sy, sz = map(float, parts[4:7])
 
@@ -134,9 +130,26 @@ def load_environment_from_txt(path):
                     )
                 )
 
+            # ------------------- LASER BOX -------------------
+            elif shape == "LASER_BOX":
+                px, py, pz = map(float, parts[1:4])
+                sx, sy, sz = map(float, parts[4:7])
+
+                color, idx = _parse_color(parts, 7)
+                orientation = _parse_orientation(parts, idx)
+
+                laser_id = _create_box(
+                    [px, py, pz],
+                    [sx, sy, sz],
+                    color,
+                    orientation
+                )
+
+                laser_ids.append(laser_id)
+                laser_base_positions.append([px, py, pz])
+
             # ------------------- CYLINDER -------------------
             elif shape == "CYL":
-                # CYL px py pz radius height r g b [a] [roll pitch yaw]
                 px, py, pz = map(float, parts[1:4])
                 radius = float(parts[4])
                 height = float(parts[5])
@@ -156,7 +169,6 @@ def load_environment_from_txt(path):
 
             # ------------------- SPHERE -------------------
             elif shape == "SPH":
-                # SPH px py pz radius r g b [a]
                 px, py, pz = map(float, parts[1:4])
                 radius = float(parts[4])
                 color, _ = _parse_color(parts, 5)
@@ -168,4 +180,4 @@ def load_environment_from_txt(path):
             else:
                 print(f"[WARN] Unknown shape type: {shape}")
 
-    return obstacle_ids
+    return obstacle_ids, laser_ids, laser_base_positions
