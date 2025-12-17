@@ -29,7 +29,7 @@ robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 
 # --- LOAD OBSTACLES (Correct Way) ---
 # This function now handles BOX and CYL and gives us the math data
-obs_ids, obs_data_list = load_environment_from_txt("obstacles.txt")
+obs_ids, obs_data_list = load_environment_from_txt("scenario_2_obstacles.txt")
 print(f"Loaded {len(obs_ids)} obstacles.")
 
 # Setup Joints
@@ -44,7 +44,7 @@ for i in range(p.getNumJoints(robot_id)):
         controlled_joints.append(i)
 
 # --- START POSITION (Outside the room) ---
-start_pos = [-9.0, -8.0, 1.57] 
+start_pos = [-9.0, -8.5, 1.57] 
 p.resetJointState(robot_id, joint_map["joint_mobile_x"], start_pos[0])
 p.resetJointState(robot_id, joint_map["joint_mobile_y"], start_pos[1])
 p.resetJointState(robot_id, joint_map["joint_mobile_theta"], start_pos[2])
@@ -59,7 +59,11 @@ no_steps = 15
 x_ref = np.array([0, 8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) # Goal at (0, 8)
 
 # Pass the LIST of obstacles
-mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=15, obstacle_list=obs_data_list)
+wall_bounds = {'x_min': -10.0, 'x_max': 10.0, 'y_min': -10.0, 'y_max': 10.0}
+
+mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=15, 
+                    obstacle_list=obs_data_list, 
+                    bounds=wall_bounds)
 viz = MPCVisualizer(p)
 
 u_applied = np.zeros(5)
