@@ -7,154 +7,108 @@ import cvxpy as cp
 import matplotlib.pyplot as plt
 
 from MPC import MPCController, MPCVisualizer, get_clamped_reference
-from environment_loader import load_environment_from_txt, _create_cylinder  # <-- the function above
+from environment_loader import load_environment_from_txt
 
-
-# Setup Pinocchio Model ONCE
-urdf_path = "URDF/mobileManipulator.urdf" # Ensure this path is correct
+# ==========================================
+# SETUP
+# ==========================================
+urdf_path = "URDF/mobileManipulator.urdf"
 pin_model = pin.buildModelFromUrdf(urdf_path)
 pin_data = pin_model.createData()
 
-# Connect PyBullet
 p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
-p.setGravity(0, 0, -9.81) # Gravity is important!
+p.setGravity(0, 0, -9.81)
 p.loadURDF("plane.urdf")
 
-# Load Robot
-robot_id = p.loadURDF(urdf_path, useFixedBase=True) # It acts fixed because of the Prismatic joints
+# Enable mouse interaction and free look
+p.configureDebugVisualizer(p.COV_ENABLE_MOUSE_PICKING, 1)
+p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
 
-# Get path to obstacles
-obs_PATH = "test_obs.txt"
+robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 
-# --- OBSTACLE DEFINITION ---
-# Defined here so we can pass it to MPC
-# Load obstacles
-obstacles = np.empty((0, 5), dtype=float)
-
-with open(obs_PATH, "r") as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        parts = line.split()
-        shape = parts[0].upper()
-
-        # Cylinder
-        if shape == "CYL":
-            _, px, py, pz, radius, height, r, g, b = parts
-            obstacles = np.append(obstacles, [[float(px), float(py), float(pz), float(radius), float(height)]], axis=0)
-
-obs_params = {
-    'pos': [2.0, 1.5, 0.0], 
-    'radius': 0.5, 
-    'height': 3.0
-}
-
-obstacle_ids = load_environment_from_txt(obs_PATH)
-print(f"Loaded {len(obstacle_ids)} obstacles.")
+# --- LOAD OBSTACLES (Correct Way) ---
+# This function now handles BOX and CYL and gives us the math data
+obs_ids, obs_data_list = load_environment_from_txt("obstacles.txt")
+print(f"Loaded {len(obs_ids)} obstacles.")
 
 # Setup Joints
-joint_map = {}
 controlled_joints = []
+joint_map = {}
 for i in range(p.getNumJoints(robot_id)):
     info = p.getJointInfo(robot_id, i)
     name = info[1].decode()
     joint_map[name] = i
-    # We want to control the prismatic base + arm joints
     if name in ["joint_mobile_x", "joint_mobile_y", "joint_mobile_theta", 
                 "joint_base_to_upper_arm", "joint_upper_to_lower_arm"]:
         controlled_joints.append(i)
 
-# IMPORTANT: Turn off PyBullet's default velocity motors to use Torque Control
+# --- START POSITION (Outside the room) ---
+start_pos = [-9.0, -8.0, 1.57] 
+p.resetJointState(robot_id, joint_map["joint_mobile_x"], start_pos[0])
+p.resetJointState(robot_id, joint_map["joint_mobile_y"], start_pos[1])
+p.resetJointState(robot_id, joint_map["joint_mobile_theta"], start_pos[2])
+
 p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, forces=np.zeros(len(controlled_joints)))
 
-## ==========================================
-# MAIN CONTROL LOOP
 # ==========================================
+# MPC INIT
+# ==========================================
+dt = 0.02
+no_steps = 15 
+x_ref = np.array([0, 8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) # Goal at (0, 8)
 
-# Sim setup
-dt = 0.02  # PyBullet physics time step
-no_steps = 10 # Number of physics steps per MPC step
-
-# Define Reference State (Where we want to go)
-x_ref = np.array([7, 7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-
-# Create a visual target (Red Sphere)
-target_pos_vis = x_ref[:3] # x, y, arm_height
-target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.1, rgbaColor=[1, 0, 0, 1])
-p.createMultiBody(baseVisualShapeIndex=target_visual, basePosition=target_pos_vis)
-
-mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=20, obstacle_params=obstacles)
+# Pass the LIST of obstacles
+mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=15, obstacle_list=obs_data_list)
 viz = MPCVisualizer(p)
 
-u_applied = np.zeros(5) # Start with 0 torque
+u_applied = np.zeros(5)
+target_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.2, rgbaColor=[0, 1, 0, 1])
+p.createMultiBody(baseVisualShapeIndex=target_vis, basePosition=x_ref[:3])
 
-# ==========================================
-# LOGGING INITIALIZATION
-# ==========================================
-# We create lists to store the data history
-log_t = []
-log_q = [] # Joint Positions
-log_v = [] # Joint Velocities
-log_u = [] # Control Inputs
-log_ref = [] # Reference history
-
+# ... (Rest of loop matches your previous code) ...
 print("Starting MPC Loop...")
-print("Press Ctrl+C to stop simulation and show plots.")
-
+log_t, log_q, log_v, log_u, log_ref = [], [], [], [], []
 sim_start_time = time.time()
+
 try:
     while True:
         start_time = time.time()
         
-        # --- A. READ STATE FROM PYBULLET ---
+        # 1. Read
         joint_states = p.getJointStates(robot_id, controlled_joints)
-        q_current = np.array([s[0] for s in joint_states])
-        v_current = np.array([s[1] for s in joint_states])
-        # Combine into state vector x
-        x_curr_vec = np.concatenate([q_current, v_current])
-        print(f"Current state: {x_curr_vec}")
+        q_curr = np.array([s[0] for s in joint_states])
+        v_curr = np.array([s[1] for s in joint_states])
+        x_curr_vec = np.concatenate([q_curr, v_curr])
+        
+        # 2. Log
+        log_t.append(start_time - sim_start_time)
+        log_q.append(q_curr); log_v.append(v_curr); log_u.append(u_applied)
 
-        # --- B. LOG DATA ---
-        current_time = start_time - sim_start_time
-        log_t.append(current_time)
-        log_q.append(q_current)
-        log_v.append(v_current)
-        log_u.append(u_applied) # Log the PREVIOUS applied torque (or current if you prefer)
-        #log_ref.append(x_ref)
-        
-        # --- D. SOLVE MPC ---
-        #print(mpc.get_control_action(q_current, v_current, u_applied))
-        x_ref_local = get_clamped_reference(x_curr_vec, x_ref, max_lookahead=5)
-        
-        # Update MPC with this new local target
+        # 3. Ref (Lookahead 2.0 works well for corners)
+        x_ref_local = get_clamped_reference(x_curr_vec, x_ref, max_lookahead=2.0)
         mpc.x_ref_val = x_ref_local
-
-        u_optimal, X_pred = mpc.get_control_action(q_current, v_current, u_applied)
         log_ref.append(x_ref_local)
-        # --- D. VISUALIZE MPC TRAJECTORY ---
-        viz.draw_trajectory(X_pred)
 
-        print(f"Optimal Control: {u_optimal}")
-        # --- E. APPLY CONTROL (Torque) ---
-        # Clamp safety limits (PyBullet can explode with huge torques)
-        u_applied = np.clip(u_optimal, -500, 500)
+        # 4. MPC
+        u_optimal, X_pred = mpc.get_control_action(q_curr, v_curr, u_applied)
         
-        # Step simulation multiple times
+        # 5. Vis
+        viz.draw_trajectory(X_pred)
+        
+        # 6. Apply
+        u_applied = np.clip(u_optimal, -500, 500)
         for _ in range(no_steps): 
             p.setJointMotorControlArray(robot_id, controlled_joints, p.TORQUE_CONTROL, forces=u_applied)
             p.stepSimulation()
         
-        # --- G. REAL-TIME SYNC ---
-        # Now we sleep only if the calculation + physics was faster than 0.05s
         elapsed = time.time() - start_time
-        if elapsed < dt:
-            time.sleep(dt - elapsed)
+        if elapsed < dt: time.sleep(dt - elapsed)
 
 except KeyboardInterrupt:
-    print("\nSimulation Interrupted by User.")
+    print("\nStopped.")
+    
+# ... (Use the Safety Trim Plotting Code from before) ...
 
 
 # ==========================================

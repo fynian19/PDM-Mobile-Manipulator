@@ -1,121 +1,62 @@
 import pybullet as p
-import pybullet_data
-
-
-# ======================================================================
-# INTERNAL HELPERS
-# ======================================================================
 
 def _create_box(pos, half_extents, color):
-    col = p.createCollisionShape(
-        shapeType=p.GEOM_BOX,
-        halfExtents=half_extents
-    )
-    vis = p.createVisualShape(
-        shapeType=p.GEOM_BOX,
-        halfExtents=half_extents,
-        rgbaColor=color
-    )
-    return p.createMultiBody(
-        baseMass=0,
-        baseCollisionShapeIndex=col,
-        baseVisualShapeIndex=vis,
-        basePosition=pos
-    )
-
+    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+    vis = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=color)
+    return p.createMultiBody(0, col, vis, basePosition=pos)
 
 def _create_cylinder(pos, radius, height, color):
-    col = p.createCollisionShape(
-        shapeType=p.GEOM_CYLINDER,
-        radius=radius,
-        height=height
-    )
-    vis = p.createVisualShape(
-        shapeType=p.GEOM_CYLINDER,
-        radius=radius,
-        length=height,
-        rgbaColor=color
-    )
-    return p.createMultiBody(
-        baseMass=0,
-        baseCollisionShapeIndex=col,
-        baseVisualShapeIndex=vis,
-        basePosition=pos
-    )
-
-
-def _create_sphere(pos, radius, color):
-    col = p.createCollisionShape(
-        shapeType=p.GEOM_SPHERE,
-        radius=radius
-    )
-    vis = p.createVisualShape(
-        shapeType=p.GEOM_SPHERE,
-        radius=radius,
-        rgbaColor=color
-    )
-    return p.createMultiBody(
-        baseMass=0,
-        baseCollisionShapeIndex=col,
-        baseVisualShapeIndex=vis,
-        basePosition=pos
-    )
-
-
-# ======================================================================
-# ENVIRONMENT LOADER
-# ======================================================================
+    col = p.createCollisionShape(p.GEOM_CYLINDER, radius=radius, height=height)
+    vis = p.createVisualShape(p.GEOM_CYLINDER, radius=radius, length=height, rgbaColor=color)
+    return p.createMultiBody(0, col, vis, basePosition=pos)
 
 def load_environment_from_txt(path):
     """
-    Reads an obstacle description file and creates all objects in PyBullet.
-
-    Supported formats:
-    BOX px py pz sx sy sz r g b
-    CYL px py pz radius height r g b
-    SPH px py pz radius r g b
-
-    Returns:
-        list of created body unique IDs
+    Parses obstacles.txt and returns:
+    1. ids: List of PyBullet Body IDs
+    2. data: List of dicts with math data for MPC {'type', 'pos', 'size'/'radius'}
     """
-
     obstacle_ids = []
+    obstacle_data = [] 
 
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+            if not line or line.startswith("#"): continue
 
             parts = line.split()
             shape = parts[0].upper()
 
-            # ------------------- BOX -------------------
             if shape == "BOX":
+                # Format: BOX px py pz sx sy sz r g b
+                # Note: sx, sy, sz are HALF-extents in PyBullet logic
                 _, px, py, pz, sx, sy, sz, r, g, b = parts
                 pos = [float(px), float(py), float(pz)]
-                sx, sy, sz = float(sx), float(sy), float(sz)
+                half_extents = [float(sx), float(sy), float(sz)]
                 color = [float(r), float(g), float(b), 1.0]
-                obstacle_ids.append(_create_box(pos, [sx, sy, sz], color))
+                
+                obstacle_ids.append(_create_box(pos, half_extents, color))
+                
+                obstacle_data.append({
+                    'type': 'BOX',
+                    'pos': pos[:2],      # Keep only x,y for MPC
+                    'size': half_extents[:2] # Keep only sx, sy
+                })
 
-            # ------------------- CYLINDER -------------------
             elif shape == "CYL":
-                _, px, py, pz, radius, height, r, g, b = parts
+                # Format: CYL px py pz radius height r g b
+                _, px, py, pz, rad, h, r, g, b = parts
                 pos = [float(px), float(py), float(pz)]
-                radius = float(radius)
-                height = float(height)
+                radius = float(rad)
+                height = float(h)
                 color = [float(r), float(g), float(b), 1.0]
+                
                 obstacle_ids.append(_create_cylinder(pos, radius, height, color))
+                
+                obstacle_data.append({
+                    'type': 'CYL',
+                    'pos': pos[:2],
+                    'radius': radius
+                })
 
-            # ------------------- SPHERE -------------------
-            elif shape == "SPH":
-                _, px, py, pz, radius, r, g, b = parts
-                pos = [float(px), float(py), float(pz)]
-                radius = float(radius)
-                color = [float(r), float(g), float(b), 1.0]
-                obstacle_ids.append(_create_sphere(pos, radius, color))
-
-            else:
-                print(f"[WARN] Unknown shape type: {shape}")
-
-    return obstacle_ids
+    return obstacle_ids, obstacle_data

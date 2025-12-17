@@ -40,179 +40,160 @@ def get_clamped_reference(x_current, x_global, max_lookahead=3.0):
 # ==========================================
 # 1. MPC CONTROLLER CLASS
 class MPCController:
-
-    def __init__(self, urdf_path, x_ref, dt, N=10, obstacle_params=None):
+    def __init__(self, urdf_path, x_ref, dt, N=10, obstacle_list=None):
         self.dt = dt
         self.N = N 
         self.x_ref_val = x_ref
+        self.obstacle_list = obstacle_list if obstacle_list else []
+        self.MAX_OBS = 3 # Max number of active constraints (keep low for speed)
         
-        # 1. Setup Pinocchio
+        # Setup Pinocchio
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData() 
         self.nx = self.model.nv * 2
         self.nu = self.model.nv
 
-        self.x_ref_val = x_ref
-        self.obstacle_params = obstacle_params # Store obstacle info
-
-        # 2. Weights (Store as numpy arrays for math)
-        self.Q_diag = np.array([100, 100, 50, 50, 50] + [10, 10, 5, 5, 5]) 
-        self.R_diag = np.array([0.1] * self.nu) # Fixed your R shape logic
+        # Tuning
+        self.Q_diag = np.array([100, 100, 50, 50, 50] + [10, 10, 10, 5, 5]) 
+        self.R_diag = np.array([0.5] * self.nu) 
         
-        # 3. Compute Terminal Cost P
         self._compute_terminal_cost()
-
-        # 4. BUILD CVXPY PROBLEM ONCE (The Speed Fix)
         self._setup_mpc_problem()
 
     def _compute_terminal_cost(self):
-        # Linearize at the goal (x_ref) with 0 velocity
         q_goal = self.x_ref_val[:self.model.nq]
         v_goal = np.zeros(self.model.nv)
-        
-        # Get Dynamics at Goal
         Ac, Bc, _ = get_linear_dynamics(q_goal, v_goal, np.zeros(self.nu), self.model, self.data)
-        
-        # Discretize
         Ad = np.eye(self.nx) + Ac * self.dt
         Bd = Bc * self.dt
-        
-        # Solve DARE
         Q_mat = np.diag(self.Q_diag)
         R_mat = np.diag(self.R_diag)
         self.P_val = scipy.linalg.solve_discrete_are(Ad, Bd, Q_mat, R_mat)
 
-    def _compute_obstacle_plane(self, q_current):
+    def _get_obstacle_constraints(self, q_current):
         """
-        Calculates the separating plane (Normal n, Distance d)
-        Constraint: n.T @ [x,y] >= d
+        Selects the 3 closest obstacles and computes linear constraints.
         """
-        if self.obstacle_params is None:
-            # No obstacle: Return dummy constraint (0 >= -Inf)
-            return np.zeros(2), np.array([-1000.0])
-
-        # 1. Extract Positions
-        robot_pos = q_current[:2] # x, y
-        obs_pos = self.obstacle_params[0,:2] # x, y
-        obs_rad = self.obstacle_params[0,3]
+        robot_pos = q_current[:2]
+        robot_radius = 0.6 # Safety margin
         
-        # 2. Compute Normal Vector (from Obstacle -> Robot)
-        diff = robot_pos - obs_pos
-        dist = np.linalg.norm(diff)
+        candidates = []
         
-        # Safety margin (Robot radius approx 0.5m)
-        safety_margin = 0.6 
-        
-        if dist < 1e-3:
-            # Singularity (Robot inside obstacle center) - Push X+
-            normal = np.array([1.0, 0.0])
-        else:
-            normal = diff / dist
+        for obs in self.obstacle_list:
+            obs_pos = np.array(obs['pos'])
             
-        # 3. Compute Distance Limit (d)
-        # The wall is located at: Obstacle_Center + Normal * (Radius + Margin)
-        # d = normal . point_on_wall
-        point_on_wall = obs_pos + normal * (obs_rad + safety_margin)
-        d_val = np.dot(normal, point_on_wall)
+            if obs['type'] == 'CYL':
+                # Cylinder Logic
+                diff = robot_pos - obs_pos
+                dist_center = np.linalg.norm(diff)
+                
+                if dist_center < 1e-4: normal = np.array([1.0, 0])
+                else: normal = diff / dist_center
+                
+                # Surface point logic
+                d_val = np.dot(normal, obs_pos + normal * (obs['radius'] + robot_radius))
+                dist_surface = dist_center - obs['radius']
+                
+            elif obs['type'] == 'BOX':
+                # Box Logic: Find closest point on rectangle
+                half_size = np.array(obs['size'])
+                # Clamp robot position to the box extent
+                closest_x = np.clip(robot_pos[0], obs_pos[0] - half_size[0], obs_pos[0] + half_size[0])
+                closest_y = np.clip(robot_pos[1], obs_pos[1] - half_size[1], obs_pos[1] + half_size[1])
+                closest_point = np.array([closest_x, closest_y])
+                
+                diff = robot_pos - closest_point
+                dist_surface = np.linalg.norm(diff)
+                
+                if dist_surface < 1e-4: # Inside box
+                    normal = (robot_pos - obs_pos) # Push away from center
+                    if np.linalg.norm(normal) == 0: normal = np.array([1.0, 0])
+                    else: normal /= np.linalg.norm(normal)
+                else:
+                    normal = diff / dist_surface
+                
+                d_val = np.dot(normal, closest_point + normal * robot_radius)
+
+            candidates.append((dist_surface, normal, d_val))
+
+        # Sort by distance and take top MAX_OBS
+        candidates.sort(key=lambda x: x[0])
         
-        return normal, np.array([d_val])
+        # Initialize with dummy constraints (Always True: 0*x >= -1000)
+        n_out = np.zeros((self.MAX_OBS, 2))
+        d_out = np.full(self.MAX_OBS, -1000.0) 
+        
+        for i in range(min(len(candidates), self.MAX_OBS)):
+            n_out[i, :] = candidates[i][1]
+            d_out[i]    = candidates[i][2]
+            
+        return n_out, d_out
 
     def _setup_mpc_problem(self):
-        """
-        Defines the MPC problem symbolically ONCE.
-        We use cp.Parameter for matrices that change every step.
-        """
-        # --- Parameters (Placeholders for data) ---
+        # ... (Standard Parameters) ...
         self.p_Ad = cp.Parameter((self.nx, self.nx), name="Ad")
         self.p_Bd = cp.Parameter((self.nx, self.nu), name="Bd")
         self.p_dd = cp.Parameter((self.nx,), name="dd")
         self.p_x0 = cp.Parameter((self.nx,), name="x0")
         self.p_xref = cp.Parameter((self.nx,), name="xref")
         
-        # --- Variables ---
+        # --- NEW: Multiple Obstacles (Shape is N x 2) ---
+        self.p_obs_n = cp.Parameter((self.MAX_OBS, 2), name="obs_n") 
+        self.p_obs_d = cp.Parameter((self.MAX_OBS,), name="obs_d")
+
         self.X = cp.Variable((self.nx, self.N+1))
         self.U = cp.Variable((self.nu, self.N))
         
-        # --- Cost & Constraints ---
         cost = 0
         constraints = [self.X[:, 0] == self.p_x0]
-
-        # --- NEW: Obstacle Constraint Parameters ---
-        self.p_obs_n = cp.Parameter((2,), name="obs_n") # Normal vector
-        self.p_obs_d = cp.Parameter((1,), name="obs_d") # Scalar distance
-
-        # Pre-compute sqrt matrices for efficient 'sum_squares' (Standard CVXPY trick)
+        
         Q_sqrt = np.sqrt(self.Q_diag)
         R_sqrt = np.sqrt(self.R_diag)
 
         for k in range(self.N):
-            # Cost (Tracking + Effort)
             state_error = self.X[:, k] - self.p_xref
             cost += cp.sum_squares(cp.multiply(Q_sqrt, state_error)) 
             cost += cp.sum_squares(cp.multiply(R_sqrt, self.U[:, k]))
             
-            # Dynamics Update
             constraints += [self.X[:, k+1] == self.p_Ad @ self.X[:, k] + self.p_Bd @ self.U[:, k] + self.p_dd]
-            
-            # Constraints (Make sure limits match your URDF)
-            constraints += [self.U[:, k] <= [30, 30, 30, 10, 10]]
-            constraints += [self.U[:, k] >= [-30, -30, -30, -10, -10]]
+            constraints += [self.U[:, k] <= [500, 500, 500, 200, 200]]
+            constraints += [self.U[:, k] >= [-500, -500, -500, -200, -200]]
 
-            # --- OBSTACLE CONSTRAINT ---
-            # n.T * pos >= d
+            # --- MULTI-OBSTACLE CONSTRAINTS ---
+            # Matrix multiplication applies all 3 constraints at once
             constraints += [self.p_obs_n @ self.X[:2, k+1] >= self.p_obs_d]
-            
-        # Terminal Cost (Using P)
+
         term_error = self.X[:, self.N] - self.p_xref
         cost += cp.quad_form(term_error, cp.psd_wrap(self.P_val))
 
-        # Compile!
         self.prob = cp.Problem(cp.Minimize(cost), constraints)
 
     def get_control_action(self, q, v, u_last):
-        # 1. Linearize Dynamics (Fast)
+        # Linearize Dynamics
         Ac, Bc, d = get_linear_dynamics(q, v, u_last, self.model, self.data)
         Ad, Bd, dd = discretize_dynamics(Ac, Bc, d, self.dt)
         
-        # 2. Update Parameters (No compilation needed!)
+        # Linearize Obstacles (Dynamic Selection)
+        n_vals, d_vals = self._get_obstacle_constraints(q)
+
+        # Update Params
         self.p_Ad.value = Ad
         self.p_Bd.value = Bd
         self.p_dd.value = dd
         self.p_x0.value = np.concatenate([q, v])
         self.p_xref.value = self.x_ref_val
+        self.p_obs_n.value = n_vals
+        self.p_obs_d.value = d_vals
         
-        # Update Obstacle Params
-        n_val, d_val = self._compute_obstacle_plane(q)
-        self.p_obs_n.value = n_val
-        self.p_obs_d.value = d_val
-
         try:
-            self.prob.solve(
-                solver=cp.OSQP, 
-                warm_start=True,
-                eps_abs=1e-3, # Looser tolerance (was default 1e-5)
-                eps_rel=1e-3, 
-                max_iter=1000 # Give it more time if needed
-            )
-        except Exception as e:
-            print(f"Solver crashed: {e}")
-            # FIX 1: Return a tuple (u, X) even on crash
+            self.prob.solve(solver=cp.OSQP, warm_start=True, eps_abs=1e-3, eps_rel=1e-3)
+        except Exception:
             return np.zeros(self.nu), None
 
-        # FIX 2: Accept "optimal_inaccurate" as success
-        # It just means the solver reached the limit of floating point precision
         if self.prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"Solver failed: {self.prob.status}")
-            # FIX 3: Return tuple on feasibility failure
             return np.zeros(self.nu), None
             
-        # Success path
         return self.U[:, 0].value, self.X.value
-    
-    def dummy_mpc(self):
-        u = np.ones(self.model.nv)*0  # Placeholder
-        u[2] = -80
-        return u
     
 
 # ==========================================
