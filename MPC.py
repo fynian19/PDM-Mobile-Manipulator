@@ -59,7 +59,7 @@ class MPCController:
         self.data = self.model.createData() 
         self.nx = self.model.nv * 2; self.nu = self.model.nv
 
-        self.Q_diag = np.array([100, 100, 1, 1, 1] + [1, 1, 1, 1, 1]) 
+        self.Q_diag = np.array([10000, 10000, 0.01, 0.01, 0.01] + [10, 10, 10, 10, 10]) 
         self.R_diag = np.array([1] * self.nu) 
         
         # Identify Frames
@@ -91,10 +91,10 @@ class MPCController:
         candidates = []
         vis_data = []
 
-        # --- OUTER LOOP: DEFINE PLANES ---
+        # --- OUTER LOOP: OBSTACLES ---
         for obs in self.obstacle_list:
             
-            # 1. GEOMETRY SETUP
+            # --- 1. GEOMETRY SETUP ---
             if obs['type'] == 'CYL':
                 if 'p0' in obs: 
                     p0 = np.array(obs['p0']); p1 = np.array(obs['p1'])
@@ -108,9 +108,7 @@ class MPCController:
             
             elif obs['type'] == 'BOX':
                 size = np.array(obs.get('size', [0.5,0.5,1.0]))
-                
-                # Filter Walls
-                if np.max(size[:2]) > 4.0: continue
+                if np.max(size[:2]) > 4.0: continue # Skip Walls
 
                 pos = np.array(obs.get('pos', [0,0,0]))
                 if len(pos)==2: pos=np.append(pos,0)
@@ -119,34 +117,33 @@ class MPCController:
                 h = size[2] * 2.0
                 p0 = pos.copy(); p0[2] -= h/2
                 p1 = pos.copy(); p1[2] += h/2
-                # Radius = Hypotenuse
                 radius = np.linalg.norm(size[:2])
 
-            # 2. DEFINE PLANE (Using BASE Position)
+            # --- 2. DEFINE PLANE ---
+            # Locked to Base
             surface_anchor, n_base = get_base_facing_plane(p_base, p0, p1, radius)
             
-            # Optimization: Ignore obstacles far from base
-            if np.linalg.norm(p_base - surface_anchor) > 2.5: continue
+            # Global Filter
+            if np.linalg.norm(p_base - surface_anchor) > 3.0: continue
 
-            # --- INNER LOOP: CHECK LINKS ---
+            # --- INNER LOOP: LINKS ---
             for frame_idx in self.check_frames:
                 p_link = self.data.oMf[frame_idx].translation
                 
-                # Calculate distance to Infinite Plane
+                # --- KEY FIX: EUCLIDEAN PROXIMITY CHECK ---
+                # Check real 3D distance to the anchor point.
+                # If we are far from the obstacle physically, IGNORE the infinite plane.
+                real_dist = np.linalg.norm(p_link - surface_anchor)
+                
+                if real_dist > 1.0: 
+                    continue # Skip! This kills the phantom planes.
+
+                # Now calculate projected distance for the math
                 vec_to_link = p_link - surface_anchor
                 dist_link = np.dot(n_base, vec_to_link)
                 
-                # --- KEY FIX: ACTIVATION THRESHOLD ---
-                # Only activate this constraint if the link is actually CLOSE to the plane.
-                # If the link is 1 meter "safe" (positive side), we ignore it.
-                # This prevents the "infinite tails" of planes from affecting the robot elsewhere.
-                if dist_link > 1.5: 
-                    continue
-                
-                # Calculate Jacobian only if needed (Optimization)
+                # Jacobian & Linearization
                 J_lin = pin.getFrameJacobian(self.model, self.data, frame_idx, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)[:3, :] 
-
-                # Linearization
                 margin = 0.15
                 C_row = n_base @ J_lin
                 d_val = margin - dist_link + np.dot(C_row, q_current)
