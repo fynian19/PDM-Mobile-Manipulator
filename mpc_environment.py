@@ -45,6 +45,8 @@ for i in range(p.getNumJoints(robot_id)):
 
 # --- START POSITION (Outside the room) ---
 start_pos = [-9.0, -8.5, 1.57] 
+#start_pos = [0, 0, 0] 
+
 p.resetJointState(robot_id, joint_map["joint_mobile_x"], start_pos[0])
 p.resetJointState(robot_id, joint_map["joint_mobile_y"], start_pos[1])
 p.resetJointState(robot_id, joint_map["joint_mobile_theta"], start_pos[2])
@@ -55,16 +57,17 @@ p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, for
 # MPC INIT
 # ==========================================
 dt = 0.02
-no_steps = 15 
+no_steps = 15
 x_ref = np.array([0, 8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) # Goal at (0, 8)
 
 # Pass the LIST of obstacles
 wall_bounds = {'x_min': -10.0, 'x_max': 10.0, 'y_min': -10.0, 'y_max': 10.0}
 
-mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=15, 
+mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=25, 
                     obstacle_list=obs_data_list, 
                     bounds=wall_bounds)
 viz = MPCVisualizer(p)
+
 
 u_applied = np.zeros(5)
 target_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.2, rgbaColor=[0, 1, 0, 1])
@@ -95,10 +98,12 @@ try:
         log_ref.append(x_ref_local)
 
         # 4. MPC
-        u_optimal, X_pred = mpc.get_control_action(q_curr, v_curr, u_applied)
+        u_optimal, X_pred, vis_data = mpc.get_control_action(q_curr, v_curr, u_applied)
         
+
         # 5. Vis
         viz.draw_trajectory(X_pred)
+        viz.draw_planes(vis_data)
         
         # 6. Apply
         u_applied = np.clip(u_optimal, -500, 500)
