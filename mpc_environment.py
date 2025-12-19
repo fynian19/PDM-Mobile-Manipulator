@@ -3,121 +3,160 @@ import pybullet_data
 import time
 import numpy as np
 import pinocchio as pin
-import cvxpy as cp
 import matplotlib.pyplot as plt
 
+# Custom Imports
 from MPC import MPCController, MPCVisualizer, get_clamped_reference
 from environment_loader import load_environment_from_txt
 
 # ==========================================
-# SETUP
+# 1. PYBULLET SETUP
 # ==========================================
 urdf_path = "URDF/mobileManipulator.urdf"
-pin_model = pin.buildModelFromUrdf(urdf_path)
-pin_data = pin_model.createData()
 
 p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
 p.setGravity(0, 0, -9.81)
 p.loadURDF("plane.urdf")
 
-# Enable mouse interaction and free look
+# Improve Camera & Mouse
 p.configureDebugVisualizer(p.COV_ENABLE_MOUSE_PICKING, 1)
-p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
+p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+p.resetDebugVisualizerCamera(cameraDistance=10, cameraYaw=0, cameraPitch=-89, cameraTargetPosition=[0,0,0])
 
 robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 
-# --- LOAD OBSTACLES (Correct Way) ---
-# This function now handles BOX and CYL and gives us the math data
+# ==========================================
+# 2. LOAD OBSTACLES (CLEAN)
+# ==========================================
 obs_ids, obs_data_list = load_environment_from_txt("scenario_6_obstacles.txt")
-print(f"Loaded {len(obs_ids)} obstacles.")
 
-# Setup Joints
-controlled_joints = []
-joint_map = {}
-for i in range(p.getNumJoints(robot_id)):
-    info = p.getJointInfo(robot_id, i)
-    name = info[1].decode()
-    joint_map[name] = i
-    if name in ["joint_mobile_x", "joint_mobile_y", "joint_mobile_theta", 
-                "joint_base_to_upper_arm", "joint_upper_to_lower_arm"]:
-        controlled_joints.append(i)
+mpc_obstacle_list = []
 
-# --- START POSITION (Outside the room) ---
-start_pos = [-8.5, -7, 1.57] 
-#start_pos = [0, 0, 0] 
+print(f"--> Filtering {len(obs_data_list)} objects for MPC...")
 
-p.resetJointState(robot_id, joint_map["joint_mobile_x"], start_pos[0])
-p.resetJointState(robot_id, joint_map["joint_mobile_y"], start_pos[1])
-p.resetJointState(robot_id, joint_map["joint_mobile_theta"], start_pos[2])
+for obs in obs_data_list:
+    # If the loader flagged it as a ghost (The Top Box), SKIP IT for MPC
+    if obs.get('is_ghost', False):
+        print(f"   [IGNORED] Skipping Ghost Object at {obs['pos']} for MPC.")
+        continue
+    
+    # Otherwise, it is a physical obstacle (Walls, Cylinders, Pedestal)
+    mpc_obstacle_list.append(obs)
 
-p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, forces=np.zeros(len(controlled_joints)))
+print(f"--> MPC configured with {len(mpc_obstacle_list)} physical obstacles.")
 
 # ==========================================
-# MPC INIT
+# 3. ROBOT CONFIGURATION
+# ==========================================
+controlled_joints = [0, 1, 2, 3, 4] 
+
+# Start Position (Outside the room)
+start_pos = [-8.5, -7.0, 1.57] 
+p.resetJointState(robot_id, 0, start_pos[0])
+p.resetJointState(robot_id, 1, start_pos[1])
+p.resetJointState(robot_id, 2, start_pos[2])
+
+# Disable Motors for Torque Control
+p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, forces=[0]*5)
+
+# ==========================================
+# 4. MPC & CONTROLLER SETUP
 # ==========================================
 dt = 0.02
 no_steps = 15
-x_ref = np.array([0, 8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) # Goal at (0, 8)
 
-# Pass the LIST of obstacles
+# Global Targets
+TARGET_BOX_XY = np.array([0.0, 7.0])
+HARDCODED_X = np.array([0.0, 7.1, 1.57, 1.6, 1.6] + [0]*5)
+PARKING_X = np.array([0.0, 7.0, 0.0, 0.0, 0.0] + [0]*5) 
+
+# Mode Weights
+WEIGHTS_NAV = np.array([2000, 2000, 0.01, 0.01, 0.01] + [10, 10, 1, 1, 1])
+WEIGHTS_MANIP = np.array([2000, 2000, 2000, 2000, 2000] + [10, 10, 10, 10, 10])
+
+# --- INIT MPC WITH OBSTACLES ---
 wall_bounds = {'x_min': -10.0, 'x_max': 10.0, 'y_min': -10.0, 'y_max': 10.0}
 
-mpc = MPCController(urdf_path, x_ref, dt*no_steps, N=50, 
-                    obstacle_list=obs_data_list, 
-                    bounds=wall_bounds)
+mpc = MPCController(
+    urdf_path, 
+    PARKING_X, 
+    dt*no_steps, 
+    N=40, 
+    obstacle_list=mpc_obstacle_list,  # <--- PASS THE FILTERED LIST
+    bounds=wall_bounds
+)
+
 viz = MPCVisualizer(p)
 
-
+# ==========================================
+# 5. MAIN LOOP
+# ==========================================
 u_applied = np.zeros(5)
-target_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.2, rgbaColor=[0, 1, 0, 1])
-p.createMultiBody(baseVisualShapeIndex=target_vis, basePosition=x_ref[:3])
-
-# ... (Rest of loop matches your previous code) ...
-print("Starting MPC Loop...")
+CURRENT_MODE = "INIT"
 log_t, log_q, log_v, log_u, log_ref = [], [], [], [], []
 sim_start_time = time.time()
+
+print("Starting Loop...")
 
 try:
     while True:
         start_time = time.time()
         
-        # 1. Read
-        joint_states = p.getJointStates(robot_id, controlled_joints)
-        q_curr = np.array([s[0] for s in joint_states])
-        v_curr = np.array([s[1] for s in joint_states])
+        # 1. State Estimation
+        states = p.getJointStates(robot_id, controlled_joints)
+        q_curr = np.array([s[0] for s in states])
+        v_curr = np.array([s[1] for s in states])
         x_curr_vec = np.concatenate([q_curr, v_curr])
+
+        # 2. Logic & Mode Switching
+        dist_to_target = np.linalg.norm(q_curr[:2] - TARGET_BOX_XY)
         
-        # 2. Log
-        log_t.append(start_time - sim_start_time)
-        log_q.append(q_curr); log_v.append(v_curr); log_u.append(u_applied)
+        if dist_to_target > 2.0:
+            if CURRENT_MODE != "NAV":
+                print(f"Dist {dist_to_target:.2f}m -> NAV MODE")
+                mpc.update_weights(WEIGHTS_NAV)
+                CURRENT_MODE = "NAV"
+            # Carrot Following
+            x_ref_local = get_clamped_reference(x_curr_vec, PARKING_X, max_lookahead=2.0)
+            mpc.x_ref_val = x_ref_local
+        else:
+            if CURRENT_MODE != "MANIP":
+                print(f"Dist {dist_to_target:.2f}m -> MANIP MODE")
+                mpc.update_weights(WEIGHTS_MANIP)
+                CURRENT_MODE = "MANIP"
+            mpc.x_ref_val = HARDCODED_X
+            x_ref_local = HARDCODED_X
 
-        # 3. Ref (Lookahead 2.0 works well for corners)
-        x_ref_local = get_clamped_reference(x_curr_vec, x_ref, max_lookahead=2.0)
-        mpc.x_ref_val = x_ref_local
-        log_ref.append(x_ref_local)
+   
 
-        # 4. MPC
         u_optimal, X_pred, vis_data = mpc.get_control_action(q_curr, v_curr, u_applied)
         
-
-        # 5. Vis
+        # 4. Visualization
         viz.draw_trajectory(X_pred)
-        viz.draw_planes(vis_data)
+        # This will now work because mpc.obstacle_list is not empty!
+        viz.draw_planes(vis_data) 
         
-        # 6. Apply
-        u_applied = np.clip(u_optimal, -500, 500)
-        for _ in range(no_steps): 
-            p.setJointMotorControlArray(robot_id, controlled_joints, p.TORQUE_CONTROL, forces=u_applied)
+        # 5. Apply Control
+        if u_optimal is not None:
+            u_applied = np.clip(u_optimal, -300, 300)
+            for _ in range(no_steps): 
+                p.setJointMotorControlArray(robot_id, controlled_joints, p.TORQUE_CONTROL, forces=u_applied)
+                p.stepSimulation()
+        else:
+            # Emergency Stop if MPC fails
+            p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, forces=[0]*5)
             p.stepSimulation()
         
+        # 6. Logging
+        log_t.append(time.time() - sim_start_time)
+        log_q.append(q_curr); log_v.append(v_curr); log_u.append(u_applied); log_ref.append(x_ref_local)
+
         elapsed = time.time() - start_time
         if elapsed < dt: time.sleep(dt - elapsed)
 
 except KeyboardInterrupt:
     print("\nStopped.")
-    
-# ... (Use the Safety Trim Plotting Code from before) ...
 
 
 # ==========================================
