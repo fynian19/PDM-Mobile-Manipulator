@@ -6,7 +6,7 @@ import pinocchio as pin
 import matplotlib.pyplot as plt
 
 # Custom Imports
-from MPC import MPCController, MPCVisualizer, get_clamped_reference
+from MPC import MPCController, MPCVisualizer, get_clamped_reference, update_ee_distance
 from environment_loader import load_environment_from_txt
 
 # ==========================================
@@ -29,7 +29,7 @@ robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 # ==========================================
 # 2. LOAD OBSTACLES (CLEAN)
 # ==========================================
-obs_ids, obs_data_list = load_environment_from_txt("scenario_6_obstacles.txt")
+obs_ids, obs_data_list = load_environment_from_txt("scenario_7_obstacles.txt")
 
 mpc_obstacle_list = []
 
@@ -52,7 +52,7 @@ print(f"--> MPC configured with {len(mpc_obstacle_list)} physical obstacles.")
 controlled_joints = [0, 1, 2, 3, 4] 
 
 # Start Position (Outside the room)
-start_pos = [-8.5, -7.0, 1.57] 
+start_pos = [9, 9, 0]
 p.resetJointState(robot_id, 0, start_pos[0])
 p.resetJointState(robot_id, 1, start_pos[1])
 p.resetJointState(robot_id, 2, start_pos[2])
@@ -68,8 +68,8 @@ no_steps = 15
 
 # Global Targets
 TARGET_BOX_XY = np.array([0.0, 7.0])
-HARDCODED_X = np.array([0.0, 7.1, 1.57, 1.6, 1.6] + [0]*5)
-PARKING_X = np.array([0.0, 7.0, 0.0, 0.0, 0.0] + [0]*5) 
+HARDCODED_X = np.array([0.0, 7.0, 1.57, 1.6, 1.6] + [0]*5)
+PARKING_X = np.array([0.0, 7, 0.0, 0.0, 0.0] + [0]*5) 
 
 # Mode Weights
 WEIGHTS_NAV = np.array([2000, 2000, 0.01, 0.01, 0.01] + [10, 10, 1, 1, 1])
@@ -89,6 +89,17 @@ mpc = MPCController(
 
 viz = MPCVisualizer(p)
 
+# --- SETUP TRACKING ---
+total_ee_dist = 0.0
+prev_ee_pos = None
+
+# Automatically find the last link (End Effector)
+# We subtract 1 because PyBullet indices are 0-based
+ee_link_idx = p.getNumJoints(robot_id) - 1 
+
+# Verify it's the right link (Optional)
+print(f"Tracking Distance for Link ID {ee_link_idx}: {p.getJointInfo(robot_id, ee_link_idx)[12].decode()}")
+
 # ==========================================
 # 5. MAIN LOOP
 # ==========================================
@@ -102,17 +113,28 @@ print("Starting Loop...")
 try:
     while True:
         start_time = time.time()
-        
+        prev_ee_pos, total_ee_dist = update_ee_distance(p, robot_id, ee_link_idx, prev_ee_pos, total_ee_dist)
         # 1. State Estimation
         states = p.getJointStates(robot_id, controlled_joints)
         q_curr = np.array([s[0] for s in states])
         v_curr = np.array([s[1] for s in states])
         x_curr_vec = np.concatenate([q_curr, v_curr])
+        # 1. Read State
+        states = p.getJointStates(robot_id, controlled_joints)
+        q_curr = np.array([s[0] for s in states])
+        
+        # --- CAMERA UPDATE ---
+        p.resetDebugVisualizerCamera(cameraDistance=6.0, cameraYaw=300,cameraPitch=-60, cameraTargetPosition=[q_curr[0], q_curr[1], 0.0] )
 
+        # YAW FIXED CAMERA
+        #yaw_degrees = np.degrees(q_curr[2]) - 90 
+        #p.resetDebugVisualizerCamera(cameraDistance=6.0, cameraYaw=yaw_degrees +45, cameraPitch=-60,cameraTargetPosition=[q_curr[0], q_curr[1], 0.5])
+        if len(log_t) % 50 == 0:
+            print(f"Distance Traced: {total_ee_dist:.3f} m")
         # 2. Logic & Mode Switching
         dist_to_target = np.linalg.norm(q_curr[:2] - TARGET_BOX_XY)
         
-        if dist_to_target > 2.0:
+        if dist_to_target > 0.7:
             if CURRENT_MODE != "NAV":
                 print(f"Dist {dist_to_target:.2f}m -> NAV MODE")
                 mpc.update_weights(WEIGHTS_NAV)
@@ -157,7 +179,7 @@ try:
 
 except KeyboardInterrupt:
     print("\nStopped.")
-
+print(f"FINAL METRIC: The End-Effector traced a total of {total_ee_dist:.4f} meters.")
 
 # ==========================================
 # PLOTTING

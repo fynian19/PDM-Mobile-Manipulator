@@ -5,7 +5,42 @@ import scipy.linalg
 from eq_motion_derivation import discretize_dynamics, get_linear_dynamics
 
 # ==========================================
-# 1. GEOMETRY HELPER
+# DISTANCE HELPER
+# ==========================================
+
+def update_ee_distance(p_client, robot_id, link_idx, prev_pos, current_total_dist):
+    """
+    Computes the distance traveled by a specific link since the last update.
+    
+    Args:
+        p_client: The pybullet instance (p).
+        robot_id: The ID of the robot body.
+        link_idx: The index of the link to track.
+        prev_pos: The (x,y,z) position from the previous step (or None).
+        current_total_dist: The accumulated distance so far.
+        
+    Returns:
+        (new_pos, updated_total_dist): Tuple to update your state variables.
+    """
+    # Get current link state (Index 0 is the center of mass position)
+    state = p_client.getLinkState(robot_id, link_idx)
+    curr_pos = np.array(state[0])
+
+    # Case 1: First step (no previous position)
+    if prev_pos is None:
+        return curr_pos, current_total_dist
+
+    # Case 2: Calculate Euclidean distance
+    dist_step = np.linalg.norm(curr_pos - prev_pos)
+
+    # Filter noise: Ignore microscopic movements (jitter) < 0.1mm
+    if dist_step > 1e-4:
+        current_total_dist += dist_step
+
+    return curr_pos, current_total_dist
+
+# ==========================================
+# GEOMETRY HELPER
 # ==========================================
 def get_base_facing_plane(p_base, a, b, radius):
     ab = b - a; ap = p_base - a
@@ -137,7 +172,7 @@ class MPCController:
                 dist_proj = np.dot(n_base, p_link - surface_anchor)
                 J_lin = pin.getFrameJacobian(self.model, self.data, frame_idx, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)[:3, :]
                 
-                margin = 0.15
+                margin = 0.3
                 C_row = n_base @ J_lin
                 d_val = margin - dist_proj + np.dot(C_row, q_current)
                 
