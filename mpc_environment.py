@@ -6,7 +6,7 @@ import pinocchio as pin
 import matplotlib.pyplot as plt
 
 # Custom Imports
-from MPC import MPCController, MPCVisualizer, get_clamped_reference, update_ee_distance
+from MPC import MPCController, MPCVisualizer, get_clamped_reference, update_c_space_distance, update_ee_distance
 from environment_loader import load_environment_from_txt
 
 # ==========================================
@@ -22,14 +22,14 @@ p.loadURDF("plane.urdf")
 # Improve Camera & Mouse
 p.configureDebugVisualizer(p.COV_ENABLE_MOUSE_PICKING, 1)
 p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-p.resetDebugVisualizerCamera(cameraDistance=10, cameraYaw=0, cameraPitch=-89, cameraTargetPosition=[0,0,0])
+p.resetDebugVisualizerCamera(cameraDistance=10, cameraYaw=135, cameraPitch=-35, cameraTargetPosition=[0,0,0])
 
 robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 
 # ==========================================
 # 2. LOAD OBSTACLES (CLEAN)
 # ==========================================
-obs_ids, obs_data_list = load_environment_from_txt("scenario_7_obstacles.txt")
+obs_ids, obs_data_list = load_environment_from_txt("scenario_6_obstacles.txt")
 
 mpc_obstacle_list = []
 
@@ -52,7 +52,8 @@ print(f"--> MPC configured with {len(mpc_obstacle_list)} physical obstacles.")
 controlled_joints = [0, 1, 2, 3, 4] 
 
 # Start Position (Outside the room)
-start_pos = [9, 9, 0]
+#start_pos = [-9.5, -7.0, 0]    # Original
+start_pos = [-9.5, -7.0, 0] 
 p.resetJointState(robot_id, 0, start_pos[0])
 p.resetJointState(robot_id, 1, start_pos[1])
 p.resetJointState(robot_id, 2, start_pos[2])
@@ -68,8 +69,8 @@ no_steps = 15
 
 # Global Targets
 TARGET_BOX_XY = np.array([0.0, 7.0])
-HARDCODED_X = np.array([0.0, 7.0, 1.57, 1.6, 1.6] + [0]*5)
-PARKING_X = np.array([0.0, 7, 0.0, 0.0, 0.0] + [0]*5) 
+HARDCODED_X = np.array([0.0, 7, 1.57, 1.6, 1.58] + [0]*5)
+PARKING_X = np.array([0, 7, 0.0, 0.0, 0.0] + [0]*5) 
 
 # Mode Weights
 WEIGHTS_NAV = np.array([2000, 2000, 0.01, 0.01, 0.01] + [10, 10, 1, 1, 1])
@@ -89,31 +90,36 @@ mpc = MPCController(
 
 viz = MPCVisualizer(p)
 
-# --- SETUP TRACKING ---
+# --- SETUP TRACKING (EE + JOINTS) ---
+# 1. End Effector Setup
 total_ee_dist = 0.0
 prev_ee_pos = None
-
-# Automatically find the last link (End Effector)
-# We subtract 1 because PyBullet indices are 0-based
 ee_link_idx = p.getNumJoints(robot_id) - 1 
 
-# Verify it's the right link (Optional)
-print(f"Tracking Distance for Link ID {ee_link_idx}: {p.getJointInfo(robot_id, ee_link_idx)[12].decode()}")
-
+# 2. C-Space (Joint) Setup
+total_joint_dists = np.zeros(5) # [BaseX, BaseY, Theta, Shoulder, Elbow]
+prev_q = None
 # ==========================================
 # 5. MAIN LOOP
 # ==========================================
 u_applied = np.zeros(5)
+pedestal_switch = False
 CURRENT_MODE = "INIT"
 log_t, log_q, log_v, log_u, log_ref = [], [], [], [], []
 sim_start_time = time.time()
 
 print("Starting Loop...")
-
+print("\n=== JOINT MAPPING VERIFICATION ===")
+for i, joint_idx in enumerate(controlled_joints):
+    # index 1 is the joint name
+    name = p.getJointInfo(robot_id, joint_idx)[1].decode("utf-8") 
+    print(f"Index {i} -> Joint ID {joint_idx}: {name}")
+print("==================================\n")
 try:
     while True:
         start_time = time.time()
-        prev_ee_pos, total_ee_dist = update_ee_distance(p, robot_id, ee_link_idx, prev_ee_pos, total_ee_dist)
+        
+
         # 1. State Estimation
         states = p.getJointStates(robot_id, controlled_joints)
         q_curr = np.array([s[0] for s in states])
@@ -123,18 +129,33 @@ try:
         states = p.getJointStates(robot_id, controlled_joints)
         q_curr = np.array([s[0] for s in states])
         
+                #--- TRACKING UPDATES ---
+        # A. End Effector
+        #prev_ee_pos, total_ee_dist = update_ee_distance(p, robot_id, ee_link_idx, prev_ee_pos, total_ee_dist)
+        
+        # B. Configuration Space (Joints)
+        #prev_q, total_joint_dists = update_c_space_distance(q_curr, prev_q, total_joint_dists)
+
+        # --- PERIODIC PRINTING (Every 50 steps) ---
+        #if len(log_t) % 50 == 0:
+        #    print(f"--- Step {len(log_t)} ---")
+        #    print(f"EE Path:    {total_ee_dist:.3f} m")
+        #    # Format array nicely for printing
+        #    j_dists_str = np.array2string(total_joint_dists, precision=3, separator=', ')
+        #    print(f"Joint Path: {j_dists_str}")
+
+
         # --- CAMERA UPDATE ---
-        p.resetDebugVisualizerCamera(cameraDistance=6.0, cameraYaw=300,cameraPitch=-60, cameraTargetPosition=[q_curr[0], q_curr[1], 0.0] )
+        #p.resetDebugVisualizerCamera(cameraDistance=6.0, cameraYaw=300,cameraPitch=-60, cameraTargetPosition=[q_curr[0], q_curr[1], 0.0] )
 
         # YAW FIXED CAMERA
         #yaw_degrees = np.degrees(q_curr[2]) - 90 
         #p.resetDebugVisualizerCamera(cameraDistance=6.0, cameraYaw=yaw_degrees +45, cameraPitch=-60,cameraTargetPosition=[q_curr[0], q_curr[1], 0.5])
-        if len(log_t) % 50 == 0:
-            print(f"Distance Traced: {total_ee_dist:.3f} m")
+
         # 2. Logic & Mode Switching
         dist_to_target = np.linalg.norm(q_curr[:2] - TARGET_BOX_XY)
         
-        if dist_to_target > 0.7:
+        if dist_to_target > 0.5:
             if CURRENT_MODE != "NAV":
                 print(f"Dist {dist_to_target:.2f}m -> NAV MODE")
                 mpc.update_weights(WEIGHTS_NAV)
@@ -151,8 +172,8 @@ try:
             x_ref_local = HARDCODED_X
 
    
-
-        u_optimal, X_pred, vis_data = mpc.get_control_action(q_curr, v_curr, u_applied)
+        print(pedestal_switch)
+        u_optimal, X_pred, vis_data, pedestal_switch = mpc.get_control_action(q_curr, v_curr, u_applied, pedestal_switch)
         
         # 4. Visualization
         viz.draw_trajectory(X_pred)
@@ -180,6 +201,44 @@ try:
 except KeyboardInterrupt:
     print("\nStopped.")
 print(f"FINAL METRIC: The End-Effector traced a total of {total_ee_dist:.4f} meters.")
+
+# ==========================================
+# 7. C-SPACE PATH LENGTH ANALYSIS
+# ==========================================
+print("\n" + "="*50)
+print(" CONFIGURATION SPACE PATH TRACED (PER JOINT)")
+print("="*50)
+
+# 1. Calculate the step-by-step difference
+# q_arr has shape (TimeSteps, 5)
+# diffs has shape (TimeSteps-1, 5)
+diffs = np.diff(q_arr, axis=0)
+
+# 2. Take the absolute value (treat backward movement as positive distance)
+abs_diffs = np.abs(diffs)
+
+# 3. Sum up all the small steps
+path_lengths = np.sum(abs_diffs, axis=0)
+
+# 4. Display
+joint_names = ["Base X", "Base Y", "Base Theta", "Shoulder", "Elbow"]
+units       = ["m", "m", "rad", "rad", "rad"]
+
+print(f"{'JOINT':<15} | {'PATH TRACED':<15} | {'DISPLACEMENT':<15} | {'UNIT'}")
+print("-" * 65)
+
+for i in range(len(joint_names)):
+    # Path Traced: Sum of all movements
+    traced = path_lengths[i]
+    
+    # Displacement: Just Final - Initial (for comparison)
+    disp = q_arr[-1, i] - q_arr[0, i]
+    
+    print(f"{joint_names[i]:<15} | {traced:10.4f}      | {disp:10.4f}      | {units[i]}")
+
+print("-" * 65)
+print("Note: 'Path Traced' includes back-and-forth motion.")
+print("      'Displacement' is just Final Position - Start Position.")
 
 # ==========================================
 # PLOTTING

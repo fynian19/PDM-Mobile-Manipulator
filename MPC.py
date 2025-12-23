@@ -8,6 +8,30 @@ from eq_motion_derivation import discretize_dynamics, get_linear_dynamics
 # DISTANCE HELPER
 # ==========================================
 
+def update_c_space_distance(q_curr, q_prev, total_dists):
+    """
+    Accumulates the absolute distance traveled by each joint individually.
+    
+    Args:
+        q_curr: Current joint configuration (numpy array).
+        q_prev: Previous joint configuration (numpy array) or None.
+        total_dists: Current accumulated distances (numpy array).
+        
+    Returns:
+        (q_curr, updated_totals): Tuple for state update.
+    """
+    # Case 1: First step
+    if q_prev is None:
+        return q_curr, total_dists
+
+    # Case 2: Calculate absolute difference for every joint
+    diff = np.abs(q_curr - q_prev)
+    
+    # Update totals
+    total_dists += diff
+    
+    return q_curr, total_dists
+
 def update_ee_distance(p_client, robot_id, link_idx, prev_pos, current_total_dist):
     """
     Computes the distance traveled by a specific link since the last update.
@@ -121,7 +145,7 @@ class MPCController:
         Ad = np.eye(self.nx) + Ac * self.dt; Bd = Bc * self.dt
         self.P_val = scipy.linalg.solve_discrete_are(Ad, Bd, np.diag(self.Q_diag), np.diag(self.R_diag))
 
-    def _get_constraints(self, q_current):
+    def _get_constraints(self, q_current, pedestal_switch):
         if self.model.nq > self.model.nv:
             q_pin = np.concatenate([q_current[:2], [np.cos(q_current[2]), np.sin(q_current[2])], q_current[3:]])
         else: q_pin = q_current
@@ -130,18 +154,21 @@ class MPCController:
         pin.updateFramePlacements(self.model, self.data)
         pin.computeJointJacobians(self.model, self.data, q_pin)
 
-        p_base = np.array([q_current[0], q_current[1], 0.3]) 
-        pedestal_pos = np.array([0.0, 8.0, 0.25]) 
+        p_base = np.array([q_current[0], q_current[1], 0.0]) 
+        pedestal_pos = np.array([0.0, 6.5, 0.0]) 
+        
+        print("Pedestal at:", pedestal_pos)
+        print("Base at:", p_base)
         
         # Use a single list to keep math and visuals synchronized
         combined_data = []
 
         for obs in self.obstacle_list:
             raw_pos = np.array(obs.get('pos', [0,0,0]))
-            if len(raw_pos)==2: raw_pos = np.append(raw_pos, 0.0)
-            
-            is_pedestal = (np.linalg.norm(raw_pos - pedestal_pos) < 0.5)
-            frames_to_check = self.base_frames if is_pedestal else (self.base_frames + self.arm_frames)
+            #if len(raw_pos)==2: raw_pos = np.append(raw_pos, 0.0)
+            #print((np.linalg.norm(p_base - pedestal_pos)))
+            if (np.linalg.norm(p_base - pedestal_pos) < 0.20): pedestal_switch = True
+            frames_to_check = self.base_frames if pedestal_switch else (self.base_frames + self.arm_frames)
 
             # Geometry
             if obs['type'] == 'CYL':
@@ -194,7 +221,7 @@ class MPCController:
             d_out[i] = d
             vis_data.append(v_tup)
             
-        return C_out, d_out, vis_data
+        return C_out, d_out, vis_data, pedestal_switch
 
     def _setup_mpc_problem(self):
         self.p_Ad = cp.Parameter((self.nx, self.nx)); self.p_Bd = cp.Parameter((self.nx, self.nu))
@@ -221,7 +248,7 @@ class MPCController:
         cost += cp.quad_form(self.X[:, self.N] - self.p_xref, cp.psd_wrap(self.P_val))
         self.prob = cp.Problem(cp.Minimize(cost), constraints)
 
-    def get_control_action(self, q, v, u_last):
+    def get_control_action(self, q, v, u_last, pedestal_switch):
         q_pin = q
         if self.model.nq > self.model.nv:
              q_pin = np.concatenate([q[:2], [np.cos(q[2]), np.sin(q[2])], q[3:]])
@@ -230,7 +257,7 @@ class MPCController:
         Ac = Ac[:self.nx, :self.nx]; Bc = Bc[:self.nx, :self.nu]; d = d[:self.nx]
         
         Ad, Bd, dd = discretize_dynamics(Ac, Bc, d, self.dt)
-        C_vals, d_vals, vis_data = self._get_constraints(q)
+        C_vals, d_vals, vis_data, pedestal_switch = self._get_constraints(q, pedestal_switch)
         
         self.p_Ad.value = Ad; self.p_Bd.value = Bd; self.p_dd.value = dd
         self.p_x0.value = np.concatenate([q, v])
@@ -248,7 +275,7 @@ class MPCController:
             # RETURN VIS DATA ANYWAY
             return np.zeros(self.nu), None, vis_data 
             
-        return self.U[:, 0].value, self.X.value, vis_data
+        return self.U[:, 0].value, self.X.value, vis_data, pedestal_switch
 
 
 class MPCVisualizer:
