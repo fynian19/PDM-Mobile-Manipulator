@@ -29,7 +29,7 @@ robot_id = p.loadURDF(urdf_path, useFixedBase=True)
 # ==========================================
 # 2. LOAD OBSTACLES (CLEAN)
 # ==========================================
-obs_ids, obs_data_list = load_environment_from_txt("scenario_6_obstacles.txt")
+obs_ids, obs_data_list = load_environment_from_txt("scenario_6.5_obstacles.txt")
 
 mpc_obstacle_list = []
 
@@ -53,7 +53,7 @@ controlled_joints = [0, 1, 2, 3, 4]
 
 # Start Position (Outside the room)
 #start_pos = [-9.5, -7.0, 0]    # Original
-start_pos = [-9.5, -7.0, 0] 
+start_pos = [-9, -9, 0] 
 p.resetJointState(robot_id, 0, start_pos[0])
 p.resetJointState(robot_id, 1, start_pos[1])
 p.resetJointState(robot_id, 2, start_pos[2])
@@ -69,7 +69,7 @@ no_steps = 15
 
 # Global Targets
 TARGET_BOX_XY = np.array([0.0, 7.0])
-HARDCODED_X = np.array([0.0, 7, 1.57, 1.6, 1.58] + [0]*5)
+HARDCODED_X = np.array([0.0, 7, 1.57, 1.6, 1.6] + [0]*5)
 PARKING_X = np.array([0, 7, 0.0, 0.0, 0.0] + [0]*5) 
 
 # Mode Weights
@@ -131,18 +131,19 @@ try:
         
                 #--- TRACKING UPDATES ---
         # A. End Effector
-        #prev_ee_pos, total_ee_dist = update_ee_distance(p, robot_id, ee_link_idx, prev_ee_pos, total_ee_dist)
+        prev_ee_pos, total_ee_dist = update_ee_distance(p, robot_id, ee_link_idx, prev_ee_pos, total_ee_dist)
         
         # B. Configuration Space (Joints)
-        #prev_q, total_joint_dists = update_c_space_distance(q_curr, prev_q, total_joint_dists)
+        prev_q, total_joint_dists = update_c_space_distance(q_curr, prev_q, total_joint_dists)
 
         # --- PERIODIC PRINTING (Every 50 steps) ---
-        #if len(log_t) % 50 == 0:
-        #    print(f"--- Step {len(log_t)} ---")
-        #    print(f"EE Path:    {total_ee_dist:.3f} m")
-        #    # Format array nicely for printing
-        #    j_dists_str = np.array2string(total_joint_dists, precision=3, separator=', ')
-        #    print(f"Joint Path: {j_dists_str}")
+        if len(log_t) % 5 == 0:
+            print(f"--- Step {len(log_t)} ---")
+            print(f"--- Time {time.time() - sim_start_time} ---")
+            print(f"EE Path:    {total_ee_dist:.3f} m")
+            # Format array nicely for printing
+            j_dists_str = np.array2string(total_joint_dists, precision=3, separator=', ')
+            print(f"Joint Path: {j_dists_str}")
 
 
         # --- CAMERA UPDATE ---
@@ -172,8 +173,13 @@ try:
             x_ref_local = HARDCODED_X
 
    
-        print(pedestal_switch)
+# --- MEASURE MPC COMPUTATION TIME ---
+        t0_mpc = time.perf_counter()
+        
         u_optimal, X_pred, vis_data, pedestal_switch = mpc.get_control_action(q_curr, v_curr, u_applied, pedestal_switch)
+        
+        t1_mpc = time.perf_counter()
+        mpc_duration = t1_mpc - t0_mpc
         
         # 4. Visualization
         viz.draw_trajectory(X_pred)
@@ -191,6 +197,24 @@ try:
             p.setJointMotorControlArray(robot_id, controlled_joints, p.VELOCITY_CONTROL, forces=[0]*5)
             p.stepSimulation()
         
+
+        # --- MEASURE SIMULATION STEP TIME ---
+        t0_sim = time.perf_counter()
+        
+        if u_optimal is not None:
+            u_applied = np.clip(u_optimal, -300, 300)
+            for _ in range(no_steps): 
+                p.setJointMotorControlArray(robot_id, controlled_joints, p.TORQUE_CONTROL, forces=u_applied)
+                p.stepSimulation()
+        
+        t1_sim = time.perf_counter()
+        sim_duration = t1_sim - t0_sim
+
+        # --- PRINT METRICS ---
+        # Print only occasionally to avoid slowing down the console
+        if len(log_t) % 10 == 0:
+            print(f"Step {len(log_t)} | MPC Calc: {mpc_duration*1000:.1f} ms | Physics: {sim_duration*1000:.1f} ms")
+
         # 6. Logging
         log_t.append(time.time() - sim_start_time)
         log_q.append(q_curr); log_v.append(v_curr); log_u.append(u_applied); log_ref.append(x_ref_local)

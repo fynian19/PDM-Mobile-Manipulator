@@ -157,8 +157,8 @@ class MPCController:
         p_base = np.array([q_current[0], q_current[1], 0.0]) 
         pedestal_pos = np.array([0.0, 6.5, 0.0]) 
         
-        print("Pedestal at:", pedestal_pos)
-        print("Base at:", p_base)
+        #print("Pedestal at:", pedestal_pos)
+        #print("Base at:", p_base)
         
         # Use a single list to keep math and visuals synchronized
         combined_data = []
