@@ -1,0 +1,6 @@
+The contents of this folder are the work of Damon de Groot, Calvin Hsu, Fin Kruseman Aretz, Kosma Krzyzanowski for course RO47005 PDM.
+
+The main folder contains the test scenarios and the files necessary for creating the test environments (Note that environments numbered 3, 4, 4.5 correspond to 5, 6, 6.5 in this repository). as well as:
+- URDF, URDF_RRT - contain the urdf files of the robot used
+- MPC - contains files needed to run MPC, more specifically: MPC.py contains the MPC class as well as other needed functions for running MPC. The simulation is then run in mpc_environment.py. Thats where the environment is loaded, settings of the simulation are set, MPC function is called. If you want to change the environment, you can change the name of the environment in line 32 and if you want to change the starting coordinates you can change that in line 56.
+- RRT - contains files needed to run RRT. To run it you need to download pyroboplan and pinnochio, as well as change the env and start config if needed in 5dof_rrt and then run that file to start the simulation.
